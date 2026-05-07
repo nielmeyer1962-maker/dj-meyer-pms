@@ -4,7 +4,7 @@ This file orients Claude Code to the project. Read it at the start of every sess
 
 ## What this is
 
-An internal practice management system for **DJ Meyer & Associates**, a South African professional accounting, tax, and advisory firm based in Gauteng. The system manages the *firm's work* — which client owes what statutory obligation, when it is due, who is responsible, and what the status is.
+An internal practice management system for **DJ Meyer & Co**, a South African professional accounting, tax, and advisory firm based in Gauteng. The system manages the *firm's work* — which client owes what statutory obligation, when it is due, who is responsible, and what the status is.
 
 ## What this is NOT (do not scope-creep into these)
 
