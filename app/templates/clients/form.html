@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} — DJ Meyer PMS{% endblock %}
+{% block content %}
+<h1 class="h3 mb-4">{{ title }}</h1>
+<form method="post" novalidate>
+  {{ form.hidden_tag() }}
+
+  <div class="row mb-3">
+    <div class="col-md-6">
+      {{ form.legal_name.label(class="form-label") }}
+      {{ form.legal_name(class="form-control") }}
+      {% for e in form.legal_name.errors %}
+        <div class="invalid-feedback d-block">{{ e }}</div>
+      {% endfor %}
+    </div>
+    <div class="col-md-6">
+      {{ form.trading_name.label(class="form-label") }}
+      {{ form.trading_name(class="form-control") }}
+    </div>
+  </div>
+
+  <div class="row mb-3">
+    <div class="col-md-4">
+      {{ form.entity_type.label(class="form-label") }}
+      {{ form.entity_type(class="form-select") }}
+      {% for e in form.entity_type.errors %}
+        <div class="invalid-feedback d-block">{{ e }}</div>
+      {% endfor %}
+    </div>
+    <div class="col-md-4">
+      {{ form.registration_number.label(class="form-label") }}
+      {{ form.registration_number(class="form-control") }}
+    </div>
+    <div class="col-md-4">
+      {{ form.client_since.label(class="form-label") }}
+      {{ form.client_since(class="form-control", type="date") }}
+    </div>
+  </div>
+
+  <h5 class="mt-3 mb-2">Tax references</h5>
+  <div class="row mb-3">
+    <div class="col-md-4">
+      {{ form.tax_ref.label(class="form-label") }}
+      {{ form.tax_ref(class="form-control") }}
+    </div>
+    <div class="col-md-4">
+      {{ form.vat_number.label(class="form-label") }}
+      {{ form.vat_number(class="form-control") }}
+    </div>
+    <div class="col-md-4">
+      {{ form.paye_number.label(class="form-label") }}
+      {{ form.paye_number(class="form-control") }}
+    </div>
+  </div>
+
+  <h5 class="mt-3 mb-2">Tax registrations held</h5>
+  <div class="d-flex gap-4 mb-3">
+    {% for field in [form.has_income_tax, form.has_vat, form.has_paye,
+                     form.has_provisional_tax, form.has_dividends_tax] %}
+    <div class="form-check">
+      {{ field(class="form-check-input") }}
+      {{ field.label(class="form-check-label") }}
+    </div>
+    {% endfor %}
+  </div>
+
+  <h5 class="mt-3 mb-2">Financial year-end</h5>
+  <div class="row mb-3">
+    <div class="col-md-3">
+      {{ form.year_end_month.label(class="form-label") }}
+      {{ form.year_end_month(class="form-control") }}
+      {% for e in form.year_end_month.errors %}
+        <div class="invalid-feedback d-block">{{ e }}</div>
+      {% endfor %}
+    </div>
+    <div class="col-md-3">
+      {{ form.year_end_day.label(class="form-label") }}
+      {{ form.year_end_day(class="form-control") }}
+      {% for e in form.year_end_day.errors %}
+        <div class="invalid-feedback d-block">{{ e }}</div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div class="form-check mb-4">
+    {{ form.bbee_applicable(class="form-check-input") }}
+    {{ form.bbee_applicable.label(class="form-check-label") }}
+  </div>
+
+  {{ form.submit(class="btn btn-primary") }}
+  <a href="{{ url_for('clients.list_clients') }}" class="btn btn-outline-secondary ms-2">Cancel</a>
+</form>
+{% endblock %}

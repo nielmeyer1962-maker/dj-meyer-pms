@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Clients — DJ Meyer PMS{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h1 class="h3">Clients</h1>
+  <a href="{{ url_for('clients.create_client') }}" class="btn btn-primary">+ New client</a>
+</div>
+<table class="table table-hover">
+  <thead>
+    <tr>
+      <th>Legal name</th>
+      <th>Trading name</th>
+      <th>Entity</th>
+      <th>Tax ref</th>
+      <th>Status</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for c in clients %}
+    <tr class="{{ '' if c.active else 'text-muted' }}">
+      <td>{{ c.legal_name }}</td>
+      <td>{{ c.trading_name or '—' }}</td>
+      <td>{{ c.entity_type.value }}</td>
+      <td>{{ c.tax_ref or '—' }}</td>
+      <td>{{ 'Active' if c.active else 'Archived' }}</td>
+      <td>
+        <a href="{{ url_for('clients.edit_client', client_id=c.id) }}"
+           class="btn btn-sm btn-outline-secondary">Edit</a>
+        {% if c.active %}
+        <form method="post" action="{{ url_for('clients.archive_client', client_id=c.id) }}"
+              class="d-inline"
+              onsubmit="return confirm('Archive {{ c.legal_name }}?')">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" class="btn btn-sm btn-outline-danger">Archive</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="6" class="text-center text-muted py-4">No clients yet.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
