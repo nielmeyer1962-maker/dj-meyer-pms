@@ -12,6 +12,7 @@ select = ["E", "F", "I", "W", "UP"]
 
 [tool.ruff.format]
 quote-style = "double"
+line-ending = "lf"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
