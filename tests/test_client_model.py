@@ -5,6 +5,7 @@ from app.models.client import Client, EntityType
 
 # --- Happy paths ---
 
+
 def test_client_defaults(app):
     with app.app_context():
         c = Client(legal_name="Test Corp", entity_type=EntityType.PTY_LTD)
@@ -69,6 +70,7 @@ def test_all_entity_types_persist(app):
 
 # --- Invariant: legal_name ---
 
+
 def test_legal_name_empty_raises(app):
     with app.app_context():
         with pytest.raises(ValueError, match="legal_name"):
@@ -82,6 +84,7 @@ def test_legal_name_blank_raises(app):
 
 
 # --- Invariant: year_end_month range ---
+
 
 def test_year_end_month_zero_raises(app):
     with app.app_context():
@@ -98,16 +101,19 @@ def test_year_end_month_thirteen_raises(app):
 def test_year_end_month_boundaries_valid(app):
     with app.app_context():
         for month, day in [(1, 31), (12, 31)]:
-            db.session.add(Client(
-                legal_name=f"Month {month} Corp",
-                entity_type=EntityType.PTY_LTD,
-                year_end_month=month,
-                year_end_day=day,
-            ))
+            db.session.add(
+                Client(
+                    legal_name=f"Month {month} Corp",
+                    entity_type=EntityType.PTY_LTD,
+                    year_end_month=month,
+                    year_end_day=day,
+                )
+            )
         db.session.commit()
 
 
 # --- Invariant: year_end_day valid for month ---
+
 
 def test_feb_30_raises(app):
     with app.app_context():
@@ -144,6 +150,7 @@ def test_feb_28_valid(app):
 
 
 # --- Invariant: year_end must be paired ---
+
 
 def test_day_without_month_raises(app):
     with app.app_context():

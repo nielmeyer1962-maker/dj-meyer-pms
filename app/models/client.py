@@ -32,7 +32,7 @@ class Client(db.Model):
     vat_number: Mapped[str | None] = mapped_column(String(50))
     paye_number: Mapped[str | None] = mapped_column(String(50))
     year_end_month: Mapped[int | None] = mapped_column(SmallInteger)  # 1–12
-    year_end_day: Mapped[int | None] = mapped_column(SmallInteger)    # 1–31
+    year_end_day: Mapped[int | None] = mapped_column(SmallInteger)  # 1–31
     bbee_applicable: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     client_since: Mapped[date | None] = mapped_column(Date)

@@ -12,6 +12,7 @@ def create_app(config: type = Config) -> Flask:
     migrate.init_app(app, db)
 
     from app.clients.routes import bp as clients_bp
+
     app.register_blueprint(clients_bp)
 
     @app.get("/")
