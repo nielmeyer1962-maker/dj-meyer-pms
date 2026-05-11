@@ -1,7 +1,7 @@
 from flask import Flask
 
 from app.config import Config
-from app.extensions import db, migrate
+from app.extensions import csrf, db, migrate
 
 
 def create_app(config: type = Config) -> Flask:
@@ -10,6 +10,7 @@ def create_app(config: type = Config) -> Flask:
 
     db.init_app(app)
     migrate.init_app(app, db)
+    csrf.init_app(app)
 
     from app.clients.routes import bp as clients_bp
 

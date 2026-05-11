@@ -1,3 +1,5 @@
+import calendar
+
 from flask_wtf import FlaskForm
 from wtforms import (
     BooleanField,
@@ -61,3 +63,21 @@ class ClientForm(FlaskForm):
     has_dividends_tax = BooleanField("Dividends Tax")
 
     submit = SubmitField("Save")
+
+    def validate(self, extra_validators=None):
+        if not super().validate(extra_validators):
+            return False
+        month = self.year_end_month.data
+        day = self.year_end_day.data
+        if (month is None) != (day is None):
+            field = self.year_end_day if month is not None else self.year_end_month
+            field.errors.append("Year-end month and day must both be set or both left blank.")
+            return False
+        if month is not None and day is not None:
+            _, max_day = calendar.monthrange(2001, month)
+            if day > max_day:
+                self.year_end_day.errors.append(
+                    f"Day {day} is invalid for month {month} (max {max_day})."
+                )
+                return False
+        return True
