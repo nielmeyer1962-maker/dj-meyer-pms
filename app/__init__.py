@@ -12,6 +12,10 @@ def create_app(config: type = Config) -> Flask:
     migrate.init_app(app, db)
     csrf.init_app(app)
 
+    # Register models with db.metadata. The clients blueprint loads Client
+    # transitively; ObligationInstance has no blueprint yet, so import it explicitly.
+    from app.models import obligation  # noqa: F401
+
     from app.clients.routes import bp as clients_bp
 
     app.register_blueprint(clients_bp)
