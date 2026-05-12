@@ -1,7 +1,7 @@
 import pytest
 
 from app.extensions import db
-from app.models.client import Client, EntityType
+from app.models.client import Client, EntityType, VatCategory, VatSubmissionMethod
 
 # --- Happy paths ---
 
@@ -166,3 +166,90 @@ def test_month_without_day_raises_on_flush(app):
         with pytest.raises(ValueError, match="year_end"):
             db.session.flush()
         db.session.rollback()
+
+
+# --- Invariant: VAT category + submission method ---
+
+
+def test_vat_client_with_category_and_method_valid(app):
+    with app.app_context():
+        c = Client(
+            legal_name="VAT Corp A",
+            entity_type=EntityType.PTY_LTD,
+            has_vat=True,
+            vat_category=VatCategory.A,
+            vat_submission_method=VatSubmissionMethod.EFILING,
+        )
+        db.session.add(c)
+        db.session.commit()
+        assert c.vat_category is VatCategory.A
+        assert c.vat_submission_method is VatSubmissionMethod.EFILING
+
+
+def test_has_vat_true_with_both_vat_fields_none_valid(app):
+    """Newly-registered VAT vendor whose category and method aren't yet captured."""
+    with app.app_context():
+        c = Client(
+            legal_name="Pending VAT Corp",
+            entity_type=EntityType.PTY_LTD,
+            has_vat=True,
+        )
+        db.session.add(c)
+        db.session.commit()
+        assert c.has_vat is True
+        assert c.vat_category is None
+        assert c.vat_submission_method is None
+
+
+def test_has_vat_false_with_category_raises_on_flush(app):
+    with app.app_context():
+        c = Client(
+            legal_name="Non-VAT Corp",
+            entity_type=EntityType.PTY_LTD,
+            has_vat=False,
+            vat_category=VatCategory.A,
+        )
+        db.session.add(c)
+        with pytest.raises(ValueError, match="has_vat is False"):
+            db.session.flush()
+        db.session.rollback()
+
+
+def test_has_vat_false_with_method_raises_on_flush(app):
+    with app.app_context():
+        c = Client(
+            legal_name="Non-VAT Corp",
+            entity_type=EntityType.PTY_LTD,
+            has_vat=False,
+            vat_submission_method=VatSubmissionMethod.EFILING,
+        )
+        db.session.add(c)
+        with pytest.raises(ValueError, match="has_vat is False"):
+            db.session.flush()
+        db.session.rollback()
+
+
+def test_vat_category_without_method_raises_on_flush(app):
+    """Pairing rule: vat_category set, vat_submission_method None -> must raise."""
+    with app.app_context():
+        c = Client(
+            legal_name="Half-Config Corp",
+            entity_type=EntityType.PTY_LTD,
+            has_vat=True,
+            vat_category=VatCategory.A,
+        )
+        db.session.add(c)
+        with pytest.raises(ValueError, match="both be set or both be None"):
+            db.session.flush()
+        db.session.rollback()
+
+
+def test_vat_category_invalid_string_raises(app):
+    with app.app_context():
+        with pytest.raises(ValueError, match="vat_category"):
+            Client(
+                legal_name="Corp",
+                entity_type=EntityType.PTY_LTD,
+                has_vat=True,
+                vat_category="Z",
+            )

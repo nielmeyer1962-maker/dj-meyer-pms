@@ -20,6 +20,19 @@ class EntityType(enum.Enum):
     NPC = "NPC"
 
 
+class VatCategory(enum.Enum):
+    A = "A"
+    B = "B"
+    C = "C"
+    D = "D"
+    E = "E"
+
+
+class VatSubmissionMethod(enum.Enum):
+    EFILING = "EFILING"
+    MANUAL = "MANUAL"
+
+
 class Client(db.Model):
     __tablename__ = "clients"
 
@@ -48,6 +61,13 @@ class Client(db.Model):
     has_provisional_tax: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     has_dividends_tax: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
+    # VAT-specific detail. Nullable at the DB level; cross-field invariants
+    # (pairing + has_vat consistency) are enforced in _check_pairing_invariants below.
+    vat_category: Mapped[VatCategory | None] = mapped_column(Enum(VatCategory))
+    vat_submission_method: Mapped[VatSubmissionMethod | None] = mapped_column(
+        Enum(VatSubmissionMethod)
+    )
+
     @validates("legal_name")
     def _validate_legal_name(self, key: str, value: str) -> str:
         if not value or not value.strip():
@@ -73,14 +93,70 @@ class Client(db.Model):
             raise ValueError(f"day {value} is invalid for month {month} (max {max_day})")
         return value
 
+    @validates("vat_category")
+    def _validate_vat_category(
+        self, key: str, value: VatCategory | str | None
+    ) -> VatCategory | None:
+        if value is None or isinstance(value, VatCategory):
+            return value
+        if isinstance(value, str):
+            try:
+                return VatCategory[value]
+            except KeyError as exc:
+                valid = [m.name for m in VatCategory]
+                raise ValueError(
+                    f"vat_category must be one of {valid} or None, got {value!r}"
+                ) from exc
+        raise ValueError(
+            f"vat_category must be a VatCategory member, name string, or None, got {value!r}"
+        )
+
+    @validates("vat_submission_method")
+    def _validate_vat_submission_method(
+        self, key: str, value: VatSubmissionMethod | str | None
+    ) -> VatSubmissionMethod | None:
+        if value is None or isinstance(value, VatSubmissionMethod):
+            return value
+        if isinstance(value, str):
+            try:
+                return VatSubmissionMethod[value]
+            except KeyError as exc:
+                valid = [m.name for m in VatSubmissionMethod]
+                raise ValueError(
+                    f"vat_submission_method must be one of {valid} or None, got {value!r}"
+                ) from exc
+        raise ValueError(
+            f"vat_submission_method must be a VatSubmissionMethod member, name string, "
+            f"or None, got {value!r}"
+        )
+
     def __repr__(self) -> str:
         return f"<Client {self.id} {self.legal_name!r}>"
 
 
-# Fires before INSERT and UPDATE to catch month-set-without-day (and vice versa).
-# @validates cannot catch this because it fires per-attribute, not across the whole object.
+# Fires before INSERT and UPDATE. Enforces cross-field invariants that @validates cannot
+# catch (it fires per-attribute, not across the whole object).
 @event.listens_for(Client, "before_insert")
 @event.listens_for(Client, "before_update")
-def _check_year_end_pairing(mapper, connection, target: Client) -> None:
+def _check_pairing_invariants(mapper, connection, target: Client) -> None:
+    # -------------------- (i) Year-end pairing --------------------
+    # year_end_month and year_end_day must travel together — either both set or both None.
     if (target.year_end_month is None) != (target.year_end_day is None):
-        raise ValueError("year_end_month and year_end_day must both be set or both be None")
+        raise ValueError(
+            "year_end_month and year_end_day must both be set or both be None"
+        )
+
+    # -------------------- (ii) has_vat=False forces both VAT fields to None --------------------
+    if not target.has_vat and (
+        target.vat_category is not None or target.vat_submission_method is not None
+    ):
+        raise ValueError(
+            "vat_category and vat_submission_method must be None when has_vat is False"
+        )
+
+    # -------------------- (iii) VAT pairing rule --------------------
+    # Independent of has_vat: if one VAT field is set, the other must also be set.
+    if (target.vat_category is None) != (target.vat_submission_method is None):
+        raise ValueError(
+            "vat_category and vat_submission_method must both be set or both be None"
+        )
