@@ -9,6 +9,21 @@ jobs:
   ci:
     runs-on: ubuntu-latest
 
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: djmeyer_pms_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - uses: actions/checkout@v4
 
@@ -26,5 +41,11 @@ jobs:
       - name: Format check
         run: ruff format --check .
 
-      - name: Test
-        run: pytest
+      - name: Tests
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost/djmeyer_pms_test
+          SECRET_KEY: ci-test-key
+          FLASK_APP: run.py
+        run: |
+          python -m flask db upgrade
+          pytest -v
