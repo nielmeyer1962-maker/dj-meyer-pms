@@ -142,9 +142,7 @@ def _check_pairing_invariants(mapper, connection, target: Client) -> None:
     # -------------------- (i) Year-end pairing --------------------
     # year_end_month and year_end_day must travel together — either both set or both None.
     if (target.year_end_month is None) != (target.year_end_day is None):
-        raise ValueError(
-            "year_end_month and year_end_day must both be set or both be None"
-        )
+        raise ValueError("year_end_month and year_end_day must both be set or both be None")
 
     # -------------------- (ii) has_vat=False forces both VAT fields to None --------------------
     if not target.has_vat and (
@@ -157,6 +155,4 @@ def _check_pairing_invariants(mapper, connection, target: Client) -> None:
     # -------------------- (iii) VAT pairing rule --------------------
     # Independent of has_vat: if one VAT field is set, the other must also be set.
     if (target.vat_category is None) != (target.vat_submission_method is None):
-        raise ValueError(
-            "vat_category and vat_submission_method must both be set or both be None"
-        )
+        raise ValueError("vat_category and vat_submission_method must both be set or both be None")

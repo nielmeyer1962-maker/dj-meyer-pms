@@ -14,9 +14,8 @@ def create_app(config: type = Config) -> Flask:
 
     # Register models with db.metadata. The clients blueprint loads Client
     # transitively; ObligationInstance has no blueprint yet, so import it explicitly.
-    from app.models import obligation  # noqa: F401
-
     from app.clients.routes import bp as clients_bp
+    from app.models import obligation  # noqa: F401
 
     app.register_blueprint(clients_bp)
 

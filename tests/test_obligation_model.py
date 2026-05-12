@@ -7,7 +7,6 @@ from app.extensions import db
 from app.models.client import Client, EntityType
 from app.models.obligation import ObligationInstance, ObligationStatus, ObligationType
 
-
 # --- Helpers ---
 
 
@@ -77,9 +76,7 @@ def test_all_obligation_statuses_persist(app):
                 )
             )
         db.session.commit()
-        count = db.session.scalar(
-            db.select(db.func.count()).select_from(ObligationInstance)
-        )
+        count = db.session.scalar(db.select(db.func.count()).select_from(ObligationInstance))
         assert count == len(ObligationStatus)
 
 

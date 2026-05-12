@@ -4,7 +4,6 @@ import holidays
 
 from app.utils import business_days
 
-
 # --- Sanity check: the holidays package returns expected SA holidays ---
 
 
@@ -66,16 +65,12 @@ def test_last_business_day_of_january_2026():
 
 def test_shift_christmas_2026_to_christmas_eve():
     """Christmas Day 2026 (Friday) → Thursday 24 Dec."""
-    assert business_days.shift_to_prior_business_day(date(2026, 12, 25)) == date(
-        2026, 12, 24
-    )
+    assert business_days.shift_to_prior_business_day(date(2026, 12, 25)) == date(2026, 12, 24)
 
 
 def test_shift_sunday_2026_01_25_to_friday():
     """25 Jan 2026 is Sun → 24 Jan Sat → 23 Jan Fri."""
-    assert business_days.shift_to_prior_business_day(date(2026, 1, 25)) == date(
-        2026, 1, 23
-    )
+    assert business_days.shift_to_prior_business_day(date(2026, 1, 25)) == date(2026, 1, 23)
 
 
 # --- Holiday cache ---

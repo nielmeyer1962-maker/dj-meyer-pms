@@ -41,9 +41,7 @@ class ObligationInstance(db.Model):
         nullable=False,
         index=True,
     )
-    obligation_type: Mapped[ObligationType] = mapped_column(
-        Enum(ObligationType), nullable=False
-    )
+    obligation_type: Mapped[ObligationType] = mapped_column(Enum(ObligationType), nullable=False)
     period_start: Mapped[date] = mapped_column(Date, nullable=False)
     period_end: Mapped[date] = mapped_column(Date, nullable=False)
     # For VAT201, submission_due_date == payment_due_date. Kept separate so future
