@@ -62,7 +62,14 @@ def run_migrations_offline():
 
     """
     url = config.get_main_option("sqlalchemy.url")
-    context.configure(url=url, target_metadata=get_metadata(), literal_binds=True)
+    # Postgres-only project; batch mode suppresses CREATE TYPE for ENUM columns
+    # added to existing tables (see chunk-1 migration history).
+    context.configure(
+        url=url,
+        target_metadata=get_metadata(),
+        literal_binds=True,
+        render_as_batch=False,
+    )
 
     with context.begin_transaction():
         context.run_migrations()
@@ -89,6 +96,9 @@ def run_migrations_online():
     conf_args = current_app.extensions["migrate"].configure_args
     if conf_args.get("process_revision_directives") is None:
         conf_args["process_revision_directives"] = process_revision_directives
+    # Postgres-only project; batch mode suppresses CREATE TYPE for ENUM columns
+    # added to existing tables (see chunk-1 migration history).
+    conf_args["render_as_batch"] = False
 
     connectable = get_engine()
 
