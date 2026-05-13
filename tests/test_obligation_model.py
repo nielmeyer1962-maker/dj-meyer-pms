@@ -6,6 +6,7 @@ from sqlalchemy.exc import IntegrityError
 from app.extensions import db
 from app.models.client import Client, EntityType
 from app.models.obligation import ObligationInstance, ObligationStatus, ObligationType
+from app.models.staff import Staff, StaffRole
 
 # --- Helpers ---
 
@@ -101,3 +102,52 @@ def test_client_fk_ondelete_restrict(app):
     """FK on client_id is RESTRICT so client deletion cannot orphan submission history."""
     fk = next(iter(ObligationInstance.__table__.c.client_id.foreign_keys))
     assert fk.ondelete == "RESTRICT"
+
+
+# --- assignee_id (Ticket 3b §B3) ---
+
+
+def _make_staff(code: str = "NIEL", full_name: str = "Niel Meyer") -> Staff:
+    s = Staff(code=code, full_name=full_name, role=StaffRole.TAX)
+    db.session.add(s)
+    db.session.commit()
+    return s
+
+
+def test_assignee_id_nullable(app):
+    """A fresh ObligationInstance with assignee_id=None persists — Unassigned is
+    a first-class state."""
+    with app.app_context():
+        c = _make_client()
+        oi = ObligationInstance(assignee_id=None, **_instance_kwargs(c.id, date(2026, 4, 30)))
+        db.session.add(oi)
+        db.session.commit()
+        assert oi.id is not None
+        assert oi.assignee_id is None
+
+
+def test_assignee_id_persists_with_valid_staff_fk(app):
+    with app.app_context():
+        c = _make_client()
+        s = _make_staff()
+        oi = ObligationInstance(assignee_id=s.id, **_instance_kwargs(c.id, date(2026, 4, 30)))
+        db.session.add(oi)
+        db.session.commit()
+        assert oi.assignee_id == s.id
+
+
+def test_assignee_fk_set_null_on_staff_delete(app):
+    """Hard-deleting a Staff row reverts assigned obligations to assignee_id=None,
+    not blocked. Requires SQLite PRAGMA foreign_keys = ON (see conftest)."""
+    with app.app_context():
+        c = _make_client()
+        s = _make_staff()
+        oi = ObligationInstance(assignee_id=s.id, **_instance_kwargs(c.id, date(2026, 4, 30)))
+        db.session.add(oi)
+        db.session.commit()
+        assert oi.assignee_id == s.id
+
+        db.session.delete(s)
+        db.session.commit()
+        db.session.refresh(oi)
+        assert oi.assignee_id is None

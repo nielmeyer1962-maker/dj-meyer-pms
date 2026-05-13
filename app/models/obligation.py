@@ -56,6 +56,20 @@ class ObligationInstance(db.Model):
         nullable=False,
         default=ObligationStatus.PENDING,
     )
+    # Nullable so the dashboard can surface "Unassigned" as a first-class filter
+    # category — newly-generated obligations for a client whose engagement-rep
+    # mapping isn't captured yet show up here. ON DELETE SET NULL because staff
+    # offboarding is a normal event: hard-deleting a staff record reverts their
+    # open obligations to unassigned rather than blocking the delete (RESTRICT
+    # would force manual reassignment first). Soft delete via Staff.active=False
+    # is the recommended routine path; SET NULL is the right hard-delete
+    # semantics.
+    assignee_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("staff.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     # Stored UTC; display in Africa/Johannesburg when shown to users
     generated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
