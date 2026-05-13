@@ -63,6 +63,27 @@
     </div>
     {% endfor %}
   </div>
+  {% for e in form.has_vat.errors %}
+    <div class="invalid-feedback d-block">{{ e }}</div>
+  {% endfor %}
+
+  <h5 class="mt-3 mb-2">VAT details</h5>
+  <div class="row mb-3">
+    <div class="col-md-3">
+      {{ form.vat_category.label(class="form-label") }}
+      {{ form.vat_category(class="form-select") }}
+      {% for e in form.vat_category.errors %}
+        <div class="invalid-feedback d-block">{{ e }}</div>
+      {% endfor %}
+    </div>
+    <div class="col-md-3">
+      {{ form.vat_submission_method.label(class="form-label") }}
+      {{ form.vat_submission_method(class="form-select") }}
+      {% for e in form.vat_submission_method.errors %}
+        <div class="invalid-feedback d-block">{{ e }}</div>
+      {% endfor %}
+    </div>
+  </div>
 
   <h5 class="mt-3 mb-2">Financial year-end</h5>
   <div class="row mb-3">

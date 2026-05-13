@@ -11,7 +11,7 @@ from wtforms import (
     validators,
 )
 
-from app.models.client import EntityType
+from app.models.client import EntityType, VatCategory, VatSubmissionMethod
 
 
 class ClientForm(FlaskForm):
@@ -62,6 +62,21 @@ class ClientForm(FlaskForm):
     has_provisional_tax = BooleanField("Provisional Tax")
     has_dividends_tax = BooleanField("Dividends Tax")
 
+    vat_category = SelectField(
+        "VAT category",
+        choices=[("", "—")] + [(c.name, c.name) for c in VatCategory],
+        validators=[validators.Optional()],
+    )
+    vat_submission_method = SelectField(
+        "VAT submission method",
+        choices=[
+            ("", "—"),
+            (VatSubmissionMethod.EFILING.name, "eFiling"),
+            (VatSubmissionMethod.MANUAL.name, "Manual"),
+        ],
+        validators=[validators.Optional()],
+    )
+
     submit = SubmitField("Save")
 
     def validate(self, extra_validators=None):
@@ -80,4 +95,21 @@ class ClientForm(FlaskForm):
                     f"Day {day} is invalid for month {month} (max {max_day})."
                 )
                 return False
+
+        # VAT field invariants — mirror app/models/client.py _check_pairing_invariants:
+        # has_vat=False forbids any VAT detail; pairing rule applies in all cases.
+        cat = self.vat_category.data or None
+        method = self.vat_submission_method.data or None
+        if not self.has_vat.data and (cat or method):
+            self.has_vat.errors.append(
+                "VAT category and submission method must both be empty when VAT is not registered."
+            )
+            return False
+        if (cat is None) != (method is None):
+            target = self.vat_submission_method if cat else self.vat_category
+            target.errors.append(
+                "VAT category and submission method must both be set or both be empty."
+            )
+            return False
+
         return True

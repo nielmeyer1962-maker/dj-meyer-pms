@@ -2,7 +2,7 @@ from flask import Blueprint, flash, redirect, render_template, request, url_for
 
 from app.clients.forms import ClientForm
 from app.extensions import db
-from app.models.client import Client, EntityType
+from app.models.client import Client, EntityType, VatCategory, VatSubmissionMethod
 
 bp = Blueprint("clients", __name__, url_prefix="/clients")
 
@@ -35,6 +35,14 @@ def create_client():
                 has_paye=form.has_paye.data,
                 has_provisional_tax=form.has_provisional_tax.data,
                 has_dividends_tax=form.has_dividends_tax.data,
+                vat_category=(
+                    VatCategory[form.vat_category.data] if form.vat_category.data else None
+                ),
+                vat_submission_method=(
+                    VatSubmissionMethod[form.vat_submission_method.data]
+                    if form.vat_submission_method.data
+                    else None
+                ),
             )
         except ValueError as exc:
             flash(str(exc), "danger")
@@ -53,6 +61,10 @@ def edit_client(client_id: int):
     if request.method == "GET":
         # SelectField expects the enum name string, not the enum member
         form.entity_type.data = client.entity_type.name
+        form.vat_category.data = client.vat_category.name if client.vat_category else ""
+        form.vat_submission_method.data = (
+            client.vat_submission_method.name if client.vat_submission_method else ""
+        )
     if form.validate_on_submit():
         try:
             client.legal_name = form.legal_name.data
@@ -71,6 +83,14 @@ def edit_client(client_id: int):
             client.has_paye = form.has_paye.data
             client.has_provisional_tax = form.has_provisional_tax.data
             client.has_dividends_tax = form.has_dividends_tax.data
+            client.vat_category = (
+                VatCategory[form.vat_category.data] if form.vat_category.data else None
+            )
+            client.vat_submission_method = (
+                VatSubmissionMethod[form.vat_submission_method.data]
+                if form.vat_submission_method.data
+                else None
+            )
         except ValueError as exc:
             flash(str(exc), "danger")
         else:
