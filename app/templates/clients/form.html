@@ -111,4 +111,16 @@
   {{ form.submit(class="btn btn-primary") }}
   <a href="{{ url_for('clients.list_clients') }}" class="btn btn-outline-secondary ms-2">Cancel</a>
 </form>
+
+{% if client and client.has_vat %}
+<form method="post"
+      action="{{ url_for('clients.regenerate_obligations', client_id=client.id) }}"
+      class="mt-4">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <button type="submit" class="btn btn-outline-primary">Regenerate obligations</button>
+  <span class="text-muted small ms-2">
+    Adds VAT201 instances for periods that don't yet exist on this client. Existing instances are preserved.
+  </span>
+</form>
+{% endif %}
 {% endblock %}

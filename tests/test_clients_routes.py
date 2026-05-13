@@ -20,6 +20,23 @@ def _get_client(app, legal_name: str = "Test Co") -> Client | None:
         return db.session.scalar(db.select(Client).where(Client.legal_name == legal_name))
 
 
+def _create_vat_client(app, **kwargs) -> int:
+    """Create a fully-configured VAT client directly via the ORM. Returns its id."""
+    defaults = dict(
+        legal_name="Regen Test Co",
+        entity_type=EntityType.PTY_LTD,
+        has_vat=True,
+        vat_category=VatCategory.B,
+        vat_submission_method=VatSubmissionMethod.EFILING,
+    )
+    defaults.update(kwargs)
+    with app.app_context():
+        c = Client(**defaults)
+        db.session.add(c)
+        db.session.commit()
+        return c.id
+
+
 # --- create_client: VAT happy paths ---
 
 
@@ -123,3 +140,63 @@ def test_edit_client_updates_vat_fields_and_get_prepopulates(app, client):
         c = db.session.get(Client, client_id)
         assert c.vat_category is VatCategory.C
         assert c.vat_submission_method is VatSubmissionMethod.MANUAL
+
+
+# --- regenerate_obligations: happy path + idempotency ---
+
+
+def test_regenerate_obligations_creates_instances_and_flashes_count(app, client):
+    """Pty Ltd + VAT + Cat B + eFiling → POST regenerate → N>0 VAT201 rows
+    created, 302 redirect back to /edit, flash text contains the count."""
+    from app.models.obligation import ObligationInstance, ObligationType
+
+    client_id = _create_vat_client(app)
+
+    resp = client.post(f"/clients/{client_id}/regenerate")
+    assert resp.status_code == 302
+    assert resp.location.endswith(f"/clients/{client_id}/edit")
+
+    with app.app_context():
+        rows = db.session.scalars(
+            db.select(ObligationInstance).where(ObligationInstance.client_id == client_id)
+        ).all()
+    n = len(rows)
+    assert n > 0
+    assert all(r.obligation_type is ObligationType.VAT201 for r in rows)
+
+    # Follow the redirect to consume the flash; the count must appear in the message.
+    resp = client.get(f"/clients/{client_id}/edit")
+    assert resp.status_code == 200
+    assert f"Added {n} new obligation".encode() in resp.data
+
+
+def test_regenerate_obligations_is_idempotent(app, client):
+    """Calling regenerate a second time adds zero rows and does not raise on
+    the (client_id, obligation_type, period_end) unique constraint."""
+    from app.models.obligation import ObligationInstance
+
+    client_id = _create_vat_client(app, legal_name="Idem Co")
+
+    client.post(f"/clients/{client_id}/regenerate")
+    with app.app_context():
+        first_count = db.session.scalar(
+            db.select(db.func.count(ObligationInstance.id)).where(
+                ObligationInstance.client_id == client_id
+            )
+        )
+    assert first_count > 0
+
+    resp = client.post(f"/clients/{client_id}/regenerate")
+    assert resp.status_code == 302
+
+    with app.app_context():
+        second_count = db.session.scalar(
+            db.select(db.func.count(ObligationInstance.id)).where(
+                ObligationInstance.client_id == client_id
+            )
+        )
+    assert second_count == first_count
+
+    # Second-call flash specifically says zero new obligations.
+    resp = client.get(f"/clients/{client_id}/edit")
+    assert b"Added 0 new obligation" in resp.data
