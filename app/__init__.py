@@ -14,9 +14,11 @@ def create_app(config: type = Config) -> Flask:
 
     # Models without blueprints are imported here so they register with db.metadata.
     from app.clients.routes import bp as clients_bp
+    from app.dashboard.routes import bp as dashboard_bp
     from app.models import obligation, staff  # noqa: F401
 
     app.register_blueprint(clients_bp)
+    app.register_blueprint(dashboard_bp)
 
     @app.get("/")
     def index() -> tuple[str, int]:

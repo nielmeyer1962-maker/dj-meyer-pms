@@ -1,0 +1,158 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — DJ Meyer PMS{% endblock %}
+{% block content %}
+<h1 class="h3 mb-4">Obligations</h1>
+
+<form method="get" class="row g-2 mb-4">
+  <div class="col-md-3">
+    <label for="filter-status" class="form-label">Status</label>
+    <select id="filter-status" name="status" class="form-select form-select-sm">
+      <option value="">All</option>
+      {% for s in statuses %}
+        <option value="{{ s.name }}" {% if current_status == s.name %}selected{% endif %}>{{ s.name }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="col-md-3">
+    <label for="filter-assignee" class="form-label">Assignee</label>
+    <select id="filter-assignee" name="assignee" class="form-select form-select-sm">
+      <option value="">All</option>
+      <option value="{{ unassigned_sentinel }}" {% if current_assignee == unassigned_sentinel %}selected{% endif %}>Unassigned</option>
+      {% for s in active_staff %}
+        <option value="{{ s.code }}" {% if current_assignee == s.code %}selected{% endif %}>{{ s.code }} — {{ s.full_name }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="col-md-3">
+    <label for="filter-view" class="form-label">View</label>
+    <select id="filter-view" name="view" class="form-select form-select-sm">
+      <option value="" {% if not current_view %}selected{% endif %}>All</option>
+      <option value="this_week" {% if current_view == 'this_week' %}selected{% endif %}>Due this week</option>
+      <option value="next_30" {% if current_view == 'next_30' %}selected{% endif %}>Due next 30 days</option>
+      <option value="overdue" {% if current_view == 'overdue' %}selected{% endif %}>Overdue</option>
+    </select>
+  </div>
+  <div class="col-md-3 d-flex align-items-end">
+    <button type="submit" class="btn btn-sm btn-primary">Apply</button>
+    <a href="{{ url_for('dashboard.list_obligations') }}" class="btn btn-sm btn-outline-secondary ms-2">Reset</a>
+  </div>
+</form>
+
+<div class="table-responsive">
+  <table class="table table-sm align-middle">
+    <thead>
+      <tr>
+        <th>Client</th>
+        <th>Type</th>
+        <th>Period end</th>
+        <th>Due</th>
+        <th>Assignee</th>
+        <th>Status</th>
+        <th class="text-end">Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for oi in instances %}
+        {% set overdue = is_overdue(oi, today) %}
+        <tr>
+          <td>{{ oi.client.legal_name if oi.client else "—" }}</td>
+          <td>{{ oi.obligation_type.name }}</td>
+          <td>{{ oi.period_end }}</td>
+          <td>{{ oi.submission_due_date }}</td>
+          <td>
+            {% if oi.assignee %}
+              {{ oi.assignee.code }}
+            {% else %}
+              <span class="text-muted">Unassigned</span>
+            {% endif %}
+          </td>
+          <td>
+            <span class="badge bg-secondary">{{ oi.status.name }}</span>
+            {% if overdue %}
+              <span class="badge bg-danger ms-1">OVERDUE</span>
+            {% endif %}
+          </td>
+          <td class="text-end">
+            <div class="btn-group btn-group-sm" role="group">
+              {% if oi.status.name == "PENDING" %}
+                <form method="post" action="{{ url_for('dashboard.mark_obligation_submitted', obligation_id=oi.id, **request.args) }}" class="d-inline">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  <button type="submit" class="btn btn-sm btn-outline-primary">Mark submitted</button>
+                </form>
+                <form method="post" action="{{ url_for('dashboard.mark_obligation_exempt', obligation_id=oi.id, **request.args) }}" class="d-inline">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  <button type="submit" class="btn btn-sm btn-outline-warning">Mark exempt</button>
+                </form>
+                <button type="button" class="btn btn-sm btn-outline-secondary"
+                        data-bs-toggle="modal" data-bs-target="#reassignModal"
+                        data-obligation-id="{{ oi.id }}"
+                        data-client-name="{{ oi.client.legal_name if oi.client else '' }}">
+                  Reassign
+                </button>
+              {% elif oi.status.name == "SUBMITTED" %}
+                <form method="post" action="{{ url_for('dashboard.mark_obligation_paid', obligation_id=oi.id, **request.args) }}" class="d-inline">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  <button type="submit" class="btn btn-sm btn-outline-success">Mark paid</button>
+                </form>
+                <form method="post" action="{{ url_for('dashboard.mark_obligation_exempt', obligation_id=oi.id, **request.args) }}" class="d-inline">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  <button type="submit" class="btn btn-sm btn-outline-warning">Mark exempt</button>
+                </form>
+                <button type="button" class="btn btn-sm btn-outline-secondary"
+                        data-bs-toggle="modal" data-bs-target="#reassignModal"
+                        data-obligation-id="{{ oi.id }}"
+                        data-client-name="{{ oi.client.legal_name if oi.client else '' }}">
+                  Reassign
+                </button>
+              {% endif %}
+            </div>
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="7" class="text-center text-muted">No obligations match the current filters.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<!-- Single shared reassign modal — locked decision §10. The trigger button's
+     data-obligation-id is read by the JS below; the modal form's action is
+     rewritten to point at the matching obligation each time the modal opens. -->
+<div class="modal fade" id="reassignModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog">
+    <form method="post" id="reassignForm">
+      {{ reassign_form.hidden_tag() }}
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title" id="reassignModalTitle">Reassign obligation</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          {{ reassign_form.assignee_id.label(class="form-label") }}
+          {{ reassign_form.assignee_id(class="form-select") }}
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+          {{ reassign_form.submit(class="btn btn-primary") }}
+        </div>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+  (function () {
+    const modal = document.getElementById("reassignModal");
+    const form = document.getElementById("reassignForm");
+    const title = document.getElementById("reassignModalTitle");
+    const queryString = window.location.search;  // preserves current filter args
+    modal.addEventListener("show.bs.modal", function (event) {
+      const trigger = event.relatedTarget;
+      const id = trigger.getAttribute("data-obligation-id");
+      const client = trigger.getAttribute("data-client-name");
+      form.action = "/dashboard/obligations/" + id + "/reassign" + queryString;
+      title.textContent = client ? "Reassign — " + client : "Reassign obligation";
+    });
+  })();
+</script>
+{% endblock %}

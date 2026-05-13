@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import enum
 from datetime import date, datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     Date,
@@ -13,9 +14,13 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.extensions import db
+
+if TYPE_CHECKING:
+    from app.models.client import Client
+    from app.models.staff import Staff
 
 
 class ObligationType(enum.Enum):
@@ -80,6 +85,11 @@ class ObligationInstance(db.Model):
         onupdate=func.now(),
         nullable=False,
     )
+
+    # Relationships (Python-only, no FK or schema change). selectinload these in
+    # query-heavy paths like the dashboard list to avoid N+1.
+    client: Mapped[Client] = relationship("Client", lazy="select")
+    assignee: Mapped[Staff | None] = relationship("Staff", lazy="select")
 
     __table_args__ = (
         # Idempotency key: prevents the generator from creating duplicates when re-run.
