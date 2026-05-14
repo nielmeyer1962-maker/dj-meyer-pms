@@ -1000,6 +1000,8 @@ Items below have no reserved slot yet — they wait until concrete demand surfac
 - Date-override editing on the detail page (only `notes` is editable in 3c).
 - Auditing of who changed what on regenerate (the `RegenerateResult` is a flash-message snapshot, not a stored audit log).
 
+- **Ticket 3f (reserved): AFS preparation deadline tracking** — annual obligation per active client, due six months after financial year-end. Same model and dashboard surface; new `ObligationType.AFS` and generator.
+
 ### Decisions locked in for Ticket 3c (per Daniel)
 
 1. **Three categories on every regenerate call:** add, refresh, prune. Terminal-state rows are never touched.
