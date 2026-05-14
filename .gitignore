@@ -23,6 +23,9 @@ htmlcov/
 # Database
 *.sqlite3
 
+# Local dev scripts
+seed.py
+
 # Editor
 .vscode/
 .idea/
