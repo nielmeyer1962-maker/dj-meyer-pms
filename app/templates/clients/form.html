@@ -119,7 +119,7 @@
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
   <button type="submit" class="btn btn-outline-primary">Regenerate obligations</button>
   <span class="text-muted small ms-2">
-    Adds VAT201 instances for periods that don't yet exist on this client. Existing instances are preserved.
+    Refreshes pending VAT201 instances to use the current submission method, adds any new periods, and removes pending periods that no longer apply. Submitted, paid, and exempt instances are never changed.
   </span>
 </form>
 {% endif %}

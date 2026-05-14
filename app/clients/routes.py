@@ -3,7 +3,7 @@ from flask import Blueprint, flash, redirect, render_template, request, url_for
 from app.clients.forms import ClientForm
 from app.extensions import db
 from app.models.client import Client, EntityType, VatCategory, VatSubmissionMethod
-from app.services.obligations.regenerate import generate_and_persist
+from app.services.obligations.regenerate import regenerate
 
 bp = Blueprint("clients", __name__, url_prefix="/clients")
 
@@ -114,13 +114,14 @@ def archive_client(client_id: int):
 def regenerate_obligations(client_id: int):
     client = db.get_or_404(Client, client_id)
     try:
-        count = generate_and_persist(client)
+        result = regenerate(client)
     except (ValueError, NotImplementedError) as exc:
         flash(str(exc), "danger")
     else:
         db.session.commit()
         flash(
-            f"Added {count} new obligation(s) for {client.legal_name}.",
+            f"Regenerated obligations for {client.legal_name}: "
+            f"added {result.added}, updated {result.updated}, removed {result.deleted}.",
             "success",
         )
     return redirect(url_for("clients.edit_client", client_id=client_id))
