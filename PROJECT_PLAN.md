@@ -1002,6 +1002,8 @@ Items below have no reserved slot yet — they wait until concrete demand surfac
 
 - **Ticket 3f (reserved): AFS preparation deadline tracking** — annual obligation per active client, due six months after financial year-end. Same model and dashboard surface; new `ObligationType.AFS` and generator.
 
+- **Ticket 3g (reserved): Ad-hoc client task tracking** — non-statutory work items (letters, document requests, follow-ups) originating from reception or staff. Same dashboard surface as obligations; new `ObligationType.TASK` with null-allowed `period_start` / `period_end` and a user-provided due date. Origin: typed in, not generated.
+
 ### Decisions locked in for Ticket 3c (per Daniel)
 
 1. **Three categories on every regenerate call:** add, refresh, prune. Terminal-state rows are never touched.
