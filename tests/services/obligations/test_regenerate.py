@@ -62,9 +62,7 @@ def _all_for_client(client_id: int) -> list[ObligationInstance]:
 
 def _pending_by_period_end(client_id: int) -> dict[date, ObligationInstance]:
     return {
-        r.period_end: r
-        for r in _all_for_client(client_id)
-        if r.status is ObligationStatus.PENDING
+        r.period_end: r for r in _all_for_client(client_id) if r.status is ObligationStatus.PENDING
     }
 
 
@@ -125,9 +123,7 @@ def test_refresh_switches_due_dates_keeps_pks(app):
         pending = _pending_by_period_end(c.id)
         assert {pe: r.id for pe, r in pending.items()} == pks_before
 
-        expected = {
-            inst.period_end: inst for inst in generate_vat201(c, today=date(2026, 1, 1))
-        }
+        expected = {inst.period_end: inst for inst in generate_vat201(c, today=date(2026, 1, 1))}
         assert set(pending) == set(expected)
         for period_end, row in pending.items():
             assert row.submission_due_date == expected[period_end].submission_due_date
