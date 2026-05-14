@@ -787,3 +787,228 @@ if request.method == "GET":
 12. **`notes` deferred entirely.** No schema change in 3b. The column lands with its UI in 3c.
 13. **VAT fields on the client form are in-scope.** `vat_category` and `vat_submission_method` are added as `SelectField`s on `ClientForm` with form-layer pairing validation mirroring the model invariants. Display shows "eFiling" / "Manual"; storage stays uppercase per the 3a decision. `EntityType[name]`-style name lookup applies in the route.
 14. **Build order inside 3b.** B2 → B1 → B3 → Cross-cutting → B4. Each prior chunk has integration value at its merge point; B4 is the user-visible tie-together at the end.
+
+---
+
+## Ticket 3c — Regenerate-with-preservation + per-obligation detail page
+
+**Scope discipline.** 3c does two things and stops. C1 upgrades the quick-win (`generate_and_persist`) shipped in `c81e0ad` into the **regenerate-with-preservation** service promised in 3a §(b). C2 adds the `notes` column to `ObligationInstance` together with the per-obligation detail page that lets a user read and edit it. Everything else 3b deferred — transition metadata, dashboard filter polish, bulk operations, calendar export, mobile card layout, email, auth, Cat E, turnover rules — stays deferred to 3d / 3e and beyond.
+
+**Builds directly on 3b.** No 3b invariant is loosened. The transitions service (`mark_submitted` / `mark_paid` / `mark_exempt`) is unchanged. The state graph remains service-layer-only. `OVERDUE` is still read-time only. The only model schema addition in 3c is one nullable `notes Text` column on `obligation_instances` (C2). Build order: **C1 → C2.**
+
+### C1) Regenerate-with-preservation — replace `app/services/obligations/regenerate.py`
+
+The quick-win in `c81e0ad` only **adds** new periods. The full service handles three categories on every call:
+
+| Category | Condition | Action |
+|---|---|---|
+| **Add** | Generated period whose `(obligation_type, period_end)` is not in DB for this client | `session.add()` the new instance — same as the quick-win. |
+| **Refresh** | Existing `PENDING` row whose `(obligation_type, period_end)` matches a generated period | Recompute `submission_due_date` and `payment_due_date` against current client config. Update in place. |
+| **Prune** | Existing `PENDING` row whose `(obligation_type, period_end)` does NOT match any generated period (e.g. Cat C → Cat A; or `has_vat` flipped True → False) | `session.delete()` the row. |
+
+Rows in status `SUBMITTED`, `PAID`, or `EXEMPT` are **never** touched — neither refreshed nor pruned. This holds even when `has_vat` flips to False: terminal-state rows preserve history; only `PENDING` rows are deleted.
+
+**Service signature:**
+
+```python
+from typing import NamedTuple
+
+
+class RegenerateResult(NamedTuple):
+    added: int
+    updated: int
+    deleted: int
+
+
+def regenerate(client: Client, today: date | None = None) -> RegenerateResult:
+    """Synchronise this client's obligation_instances with current config.
+
+    Adds new periods, refreshes due dates on PENDING rows whose periods are still
+    valid, and deletes PENDING rows whose periods are no longer generated.
+    SUBMITTED, PAID, EXEMPT rows are never touched.
+
+    Caller owns the commit.
+    """
+```
+
+The `today` parameter mirrors `generate_vat201(today=...)` — exists for test determinism.
+
+**Implementation skeleton in prose:**
+
+1. Read all existing rows for this client into a `dict[(ObligationType, date), ObligationInstance]` keyed by `(obligation_type, period_end)`. Eager load so the row mutations below don't trigger re-queries.
+2. Call `generate_vat201(client, today=today)` — the canonical set of currently-due instances. The generator's pre-conditions already return `[]` when `has_vat` / category / method aren't all set.
+3. Index the generated list by the same key.
+4. Walk both keysets together:
+   - **In generated, not in existing** → `session.add()`, increment `added`.
+   - **In both** → if existing `status is PENDING` and either due date differs, copy the new dates onto the existing row and increment `updated`. If status is terminal, skip.
+   - **In existing, not in generated** → if existing `status is PENDING`, `session.delete(row)` and increment `deleted`. If status is terminal, leave untouched.
+5. Return `RegenerateResult(added, updated, deleted)`.
+
+Dict-based one-pass rather than two SQL queries because the dataset is small (≤ 24 VAT201 rows per client at the 12-month window) and per-row decisions need both Python-side state checks and date comparisons.
+
+**Route change — `app/clients/routes.py::regenerate_obligations`:**
+
+Replace `generate_and_persist(client)` with `regenerate(client)`. Flash message becomes:
+
+```
+Regenerated obligations for {legal_name}: added 3, updated 12, removed 0.
+```
+
+No zero-suppression — uniform three-count message is easier to skim.
+
+**Template helper text — `app/templates/clients/form.html`:**
+
+Replace the existing one-line description below the "Regenerate obligations" button with:
+
+> Refreshes pending VAT201 instances to use the current submission method, adds any new periods, and removes pending periods that no longer apply. Submitted, paid, and exempt instances are never changed.
+
+**Files modified/created in C1:**
+
+- `app/services/obligations/regenerate.py` — replace `generate_and_persist` with `regenerate` + `RegenerateResult`. The old function has no other callers; delete it cleanly rather than keep a shim.
+- `app/clients/routes.py` — call `regenerate`; richer flash message.
+- `app/templates/clients/form.html` — update helper text.
+- `tests/services/obligations/test_regenerate.py` — new test module (see below).
+- `tests/test_clients_routes.py` — update existing regenerate-route tests for the new flash text and counts.
+
+**Tests for C1 (`tests/services/obligations/test_regenerate.py`):**
+
+Each test seeds a client + a fixed `today` then asserts the `RegenerateResult` and the DB state.
+
+- **First run on a new client** (Cat C, EFILING) — `added == 12`, `updated == 0`, `deleted == 0`.
+- **Second run with unchanged config** — `RegenerateResult(0, 0, 0)`. Row PKs unchanged (no churn).
+- **Refresh case** — client starts EFILING; regenerate; switch to MANUAL; regenerate again. Assert `updated > 0`, all `PENDING` rows now use MANUAL due dates, row PKs unchanged.
+- **Prune case — category change** — Cat C → Cat A. Periods ending in even months are no longer generated. Assert `deleted > 0`; the surviving `PENDING` rows all have `period_end.month in {1, 3, 5, 7, 9, 11}`.
+- **Prune case — `has_vat` off-ramp** — Cat C client with one `PENDING` (Dec), one `SUBMITTED` (Nov), one `PAID` (Oct), one `EXEMPT` (Sep). Set `has_vat=False`. Regenerate. Assert `RegenerateResult(0, 0, 1)`; the `PENDING` row is gone, the other three remain unchanged.
+- **Terminal-state immutability** — seed a `SUBMITTED` row with a deliberately wrong `submission_due_date`. Regenerate. Assert the row's `submission_due_date` is unchanged.
+- **Mixed call** — switch method AND category between two regenerate calls; assert all three counts are non-zero and the final state matches what `generate_vat201` would now produce for the `PENDING` slice.
+
+### C2) `notes` column + per-obligation detail page
+
+**Schema.** Add one column to `obligation_instances`:
+
+| Column | Type | Nullable | Default | Reason |
+|---|---|---|---|---|
+| `notes` | `Text` | Yes | — | Free-form, optional. `Text` not `String(N)` — no business reason to cap at the DB level. Soft cap in form validation (4000 chars). |
+
+**Migration:** single autogenerated Alembic revision adds `obligation_instances.notes`. Existing rows are backfilled `NULL`.
+
+**Model change — `app/models/obligation.py`:**
+
+```python
+notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+```
+
+Import `Text` from `sqlalchemy` — one-line addition to the existing import block.
+
+**Detail page — `app/dashboard/routes.py`:**
+
+Two new routes:
+
+```python
+@bp.get("/obligations/<int:obligation_id>")
+def obligation_detail(obligation_id: int): ...
+
+
+@bp.post("/obligations/<int:obligation_id>/notes")
+def update_obligation_notes(obligation_id: int): ...
+```
+
+The GET renders `dashboard/detail.html` with the full obligation, client, assignee, the `generated_at` / `updated_at` timestamps, the derived `is_overdue(instance, today_sast())` badge, the same action buttons as the list (mark-submitted / mark-paid / mark-exempt / reassign), and a notes textarea form.
+
+The POST handler updates `instance.notes` (treating empty / whitespace-only as `None`), commits, flashes success, redirects to `obligation_detail`.
+
+**Action buttons on the detail page redirect back to the detail page, not the list.** Implementation: each action `<form>` on the detail template includes a hidden `<input name="next" value="detail">`. The existing list-route action handlers (`mark_obligation_submitted`, `mark_obligation_paid`, `mark_obligation_exempt`, `reassign_obligation`) gain one branch:
+
+```python
+if request.form.get("next") == "detail":
+    return redirect(url_for("dashboard.obligation_detail", obligation_id=instance.id))
+return _redirect_to_list_preserving_filters()
+```
+
+No new POST endpoints; the existing five serve both pages.
+
+**Form — `app/dashboard/forms.py`:**
+
+```python
+class NotesForm(FlaskForm):
+    notes = TextAreaField(
+        "Notes",
+        validators=[validators.Optional(), validators.Length(max=4000)],
+    )
+    submit = SubmitField("Save notes")
+```
+
+4000-char soft cap — generous (well over a screen of prose) and stops accidental megabyte pastes. Adjustable later without migration.
+
+**List-view indicator — `app/templates/dashboard/list.html`:**
+
+Wrap the obligation-ID cell in a link to the detail page:
+
+```jinja
+<a href="{{ url_for('dashboard.obligation_detail', obligation_id=inst.id) }}">{{ inst.id }}</a>
+```
+
+Add a small note icon next to the ID when `inst.notes` is non-empty:
+
+```jinja
+{% if inst.notes and inst.notes.strip() %}
+  <span title="Has notes" aria-label="Has notes">📝</span>
+{% endif %}
+```
+
+Unicode 📝 rather than pulling in Bootstrap-icons for a single glyph. This is the only emoji that ships in the codebase — it's an affordance, not decoration.
+
+**Files modified/created in C2:**
+
+- `app/models/obligation.py` — add the `notes` column.
+- `migrations/versions/<rev>_add_notes_to_obligation_instances.py` — autogenerated single-column add.
+- `app/dashboard/routes.py` — two new routes + the `next=detail` branch in the four existing action handlers.
+- `app/dashboard/forms.py` — `NotesForm`.
+- `app/templates/dashboard/detail.html` — new template.
+- `app/templates/dashboard/list.html` — obligation-ID link + notes indicator.
+- `tests/test_obligation_model.py` — `notes` defaults to `None`, persists arbitrary text, accepts `None` explicitly.
+- `tests/dashboard/test_routes.py` — extend with the detail-page tests below.
+
+**Tests for C2 (additions to `tests/dashboard/test_routes.py`):**
+
+- `GET /dashboard/obligations/<id>` renders 200 with the obligation's status, due date, client name, and notes textarea pre-populated from the DB.
+- `GET /dashboard/obligations/<id>` for a non-existent ID returns 404.
+- `POST /dashboard/obligations/<id>/notes` with non-empty text persists, redirects to the detail page, success flash.
+- `POST /dashboard/obligations/<id>/notes` with empty / whitespace text persists `None`.
+- `POST /dashboard/obligations/<id>/notes` with > 4000 chars rejects (form-validation error, no DB write).
+- CSRF: POST without token returns 400.
+- **`next=detail` round-trip** — `POST .../mark-submitted` with form field `next=detail` redirects to `dashboard.obligation_detail`, not the list.
+- **List page links to detail** — list HTML contains the `href` for each instance's detail URL.
+- **Notes indicator** — list HTML contains the indicator span only for rows whose `notes` is non-empty.
+
+### Out of scope for Ticket 3c
+
+Two follow-ups are reserved as named tickets so the slots are committed, not vague:
+
+- **Ticket 3d (reserved): Transition metadata** — `submitted_at`, `paid_at`, `exempted_at`, plus optional `confirmation_number` and `payment_reference` captured on the dashboard action forms and wired into the three transition functions.
+- **Ticket 3e (reserved): Dashboard filter polish** — by client, by obligation_type, multi-status, custom date range.
+
+Items below have no reserved slot yet — they wait until concrete demand surfaces:
+
+- Calendar / iCal export.
+- Bulk transitions and bulk reassign.
+- Mobile card-layout fallback.
+- Email notify-assignee (SMTP plumbing).
+- User accounts / authentication.
+- Cat E VAT201 generation.
+- VAT category turnover validation; `vat_number` required when `has_vat=True`.
+- Date-override editing on the detail page (only `notes` is editable in 3c).
+- Auditing of who changed what on regenerate (the `RegenerateResult` is a flash-message snapshot, not a stored audit log).
+
+### Decisions locked in for Ticket 3c (per Daniel)
+
+1. **Three categories on every regenerate call:** add, refresh, prune. Terminal-state rows are never touched.
+2. **Stale `PENDING` rows are hard-deleted.** No "auto-EXEMPT", no `is_stale` flag. Users wanting an audit trail must EXEMPT a row manually before changing client config.
+3. **`has_vat` True → False symmetry:** all `PENDING` VAT201 rows for that client are deleted; SUBMITTED / PAID / EXEMPT rows preserve history.
+4. **Return shape:** `RegenerateResult(added, updated, deleted)` `NamedTuple`. Uniform three-count flash message, no zero-suppression.
+5. **`notes` is `Text`, nullable, no default.** Form-layer soft cap 4000 chars; no DB-level cap.
+6. **Detail page in 3c edits notes only.** Status changes go through the existing transition buttons; reassignment through the existing modal replicated on the detail page. Dates are not editable.
+7. **Action buttons exist on both list and detail pages,** served by the same five POST endpoints, via a `next=detail` form field that branches the post-success redirect.
+8. **Notes indicator on the list is a small inline icon next to the obligation ID** when `notes` is non-empty and non-whitespace. No preview snippet, no separate column.
+9. **Deferred work has explicit ticket slots:** Ticket 3d for transition metadata; Ticket 3e for dashboard filter polish. Items beyond 3e have no reserved slot until demand surfaces.
+10. **Build order: C1 → C2.** Each chunk has integration value at its merge point.
