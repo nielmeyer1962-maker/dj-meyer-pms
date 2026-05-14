@@ -39,9 +39,7 @@ def generate_and_persist(client: Client) -> int:
 
     generated = generate_vat201(client)
     new_instances = [
-        inst
-        for inst in generated
-        if (inst.obligation_type, inst.period_end) not in existing_keys
+        inst for inst in generated if (inst.obligation_type, inst.period_end) not in existing_keys
     ]
     db.session.add_all(new_instances)
     return len(new_instances)
