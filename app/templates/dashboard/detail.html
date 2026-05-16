@@ -42,4 +42,20 @@
     {% endif %}
   </dd>
 </dl>
+
+<hr class="my-4">
+
+<h2 class="h5 mb-3">Notes</h2>
+<form method="post" action="{{ url_for('dashboard.update_obligation_notes', obligation_id=instance.id) }}">
+  {{ notes_form.hidden_tag() }}
+  <div class="mb-3">
+    {{ notes_form.notes(class="form-control" + (" is-invalid" if notes_form.notes.errors else ""), rows="6") }}
+    {% if notes_form.notes.errors %}
+      <div class="invalid-feedback">
+        {% for err in notes_form.notes.errors %}{{ err }}{% endfor %}
+      </div>
+    {% endif %}
+  </div>
+  {{ notes_form.submit(class="btn btn-primary") }}
+</form>
 {% endblock %}

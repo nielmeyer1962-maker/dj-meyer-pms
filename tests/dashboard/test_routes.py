@@ -295,3 +295,70 @@ def test_detail_renders_unassigned_when_no_assignee(client, world):
 def test_detail_returns_404_for_nonexistent_id(client, world):
     resp = client.get("/dashboard/obligations/99999")
     assert resp.status_code == 404
+
+
+# --- POST /dashboard/obligations/<id>/notes — notes save (Ticket 3c §C2) ---
+
+
+def test_save_notes_with_non_empty_text_persists_and_redirects(client, world):
+    """Happy path: non-empty notes persist, redirect to detail, success flash."""
+    oi_id = world["pending_overdue_id"]
+    resp = client.post(
+        f"/dashboard/obligations/{oi_id}/notes",
+        data={"notes": "Awaiting client signature on VAT201."},
+    )
+    assert resp.status_code == 302
+    assert resp.headers["Location"].endswith(f"/dashboard/obligations/{oi_id}")
+    assert db.session.get(ObligationInstance, oi_id).notes == (
+        "Awaiting client signature on VAT201."
+    )
+
+
+def test_save_notes_with_whitespace_only_persists_none(client, world):
+    """Whitespace-only input becomes None — no empty-string rows in the DB."""
+    oi_id = world["pending_overdue_id"]
+    # Seed an existing note so we can confirm the wipe.
+    client.post(f"/dashboard/obligations/{oi_id}/notes", data={"notes": "preset"})
+    assert db.session.get(ObligationInstance, oi_id).notes == "preset"
+
+    resp = client.post(
+        f"/dashboard/obligations/{oi_id}/notes",
+        data={"notes": "   \n\t "},
+    )
+    assert resp.status_code == 302
+    assert db.session.get(ObligationInstance, oi_id).notes is None
+
+
+def test_save_notes_over_4000_chars_rejects_with_form_error_no_db_write(client, world):
+    """4001 chars fails server-side validation: re-render with inline error, no DB write."""
+    oi_id = world["pending_overdue_id"]
+    before = db.session.get(ObligationInstance, oi_id).notes
+    resp = client.post(
+        f"/dashboard/obligations/{oi_id}/notes",
+        data={"notes": "a" * 4001},
+    )
+    # Re-renders the detail page (not a redirect).
+    assert resp.status_code == 200
+    body = resp.data.decode()
+    # Bootstrap inline-error marker and WTForms Length default message.
+    assert "is-invalid" in body
+    assert "4000" in body  # WTForms Length default includes the limit
+    # And the typed text survives the re-render so the user doesn't lose it.
+    assert "a" * 4001 in body
+    # DB unchanged.
+    assert db.session.get(ObligationInstance, oi_id).notes == before
+
+
+def test_save_notes_without_csrf_token_rejected(app, world):
+    """POST /notes without a CSRF token returns 400 when CSRF is enabled."""
+    app.config["WTF_CSRF_ENABLED"] = True
+    try:
+        c = app.test_client()
+        oi_id = world["pending_overdue_id"]
+        resp = c.post(
+            f"/dashboard/obligations/{oi_id}/notes",
+            data={"notes": "anything"},
+        )
+        assert resp.status_code == 400
+    finally:
+        app.config["WTF_CSRF_ENABLED"] = False

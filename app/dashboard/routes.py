@@ -5,7 +5,7 @@ from datetime import timedelta
 from flask import Blueprint, abort, flash, redirect, render_template, request, url_for
 from sqlalchemy.orm import selectinload
 
-from app.dashboard.forms import ReassignForm
+from app.dashboard.forms import NotesForm, ReassignForm
 from app.extensions import db
 from app.models.client import Client
 from app.models.obligation import ObligationInstance, ObligationStatus
@@ -118,7 +118,35 @@ def obligation_detail(obligation_id: int):
         instance=instance,
         today=today_sast(),
         is_overdue=is_overdue,
+        notes_form=NotesForm(notes=instance.notes),
     )
+
+
+@bp.post("/obligations/<int:obligation_id>/notes")
+def update_obligation_notes(obligation_id: int):
+    instance = db.get_or_404(
+        ObligationInstance,
+        obligation_id,
+        options=[
+            selectinload(ObligationInstance.client),
+            selectinload(ObligationInstance.assignee),
+        ],
+    )
+    form = NotesForm()
+    if not form.validate_on_submit():
+        # Re-render so the user keeps their typed text + sees inline errors.
+        return render_template(
+            "dashboard/detail.html",
+            instance=instance,
+            today=today_sast(),
+            is_overdue=is_overdue,
+            notes_form=form,
+        )
+    raw = (form.notes.data or "").strip()
+    instance.notes = raw if raw else None
+    db.session.commit()
+    flash(f"Obligation {instance.id} notes updated.", "success")
+    return redirect(url_for("dashboard.obligation_detail", obligation_id=instance.id))
 
 
 # --- Per-row action handlers. Each follows the same shape:
