@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Obligation {{ instance.id }} — DJ Meyer PMS{% endblock %}
+{% block content %}
+{% set overdue = is_overdue(instance, today) %}
+
+<nav aria-label="breadcrumb" class="mb-3">
+  <ol class="breadcrumb">
+    <li class="breadcrumb-item">
+      <a href="{{ url_for('dashboard.list_obligations') }}">Obligations</a>
+    </li>
+    <li class="breadcrumb-item active" aria-current="page">#{{ instance.id }}</li>
+  </ol>
+</nav>
+
+<h1 class="h3 mb-4">
+  {{ instance.obligation_type.name }} — {{ instance.client.legal_name if instance.client else "—" }}
+  <span class="badge bg-secondary ms-2">{{ instance.status.name }}</span>
+  {% if overdue %}
+    <span class="badge bg-danger ms-1">OVERDUE</span>
+  {% endif %}
+</h1>
+
+<dl class="row">
+  <dt class="col-sm-3">Client</dt>
+  <dd class="col-sm-9">{{ instance.client.legal_name if instance.client else "—" }}</dd>
+
+  <dt class="col-sm-3">Period</dt>
+  <dd class="col-sm-9">{{ instance.period_start }} → {{ instance.period_end }}</dd>
+
+  <dt class="col-sm-3">Submission due</dt>
+  <dd class="col-sm-9">{{ instance.submission_due_date }}</dd>
+
+  <dt class="col-sm-3">Payment due</dt>
+  <dd class="col-sm-9">{{ instance.payment_due_date }}</dd>
+
+  <dt class="col-sm-3">Assignee</dt>
+  <dd class="col-sm-9">
+    {% if instance.assignee %}
+      {{ instance.assignee.code }} — {{ instance.assignee.full_name }}
+    {% else %}
+      <span class="text-muted">Unassigned</span>
+    {% endif %}
+  </dd>
+</dl>
+{% endblock %}

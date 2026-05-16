@@ -103,6 +103,24 @@ def list_obligations():
     )
 
 
+@bp.get("/obligations/<int:obligation_id>")
+def obligation_detail(obligation_id: int):
+    instance = db.get_or_404(
+        ObligationInstance,
+        obligation_id,
+        options=[
+            selectinload(ObligationInstance.client),
+            selectinload(ObligationInstance.assignee),
+        ],
+    )
+    return render_template(
+        "dashboard/detail.html",
+        instance=instance,
+        today=today_sast(),
+        is_overdue=is_overdue,
+    )
+
+
 # --- Per-row action handlers. Each follows the same shape:
 #     get-or-404 → call B1 → ValueError flash / success commit-and-flash →
 #     redirect preserving request.args (locked decision §11). ---

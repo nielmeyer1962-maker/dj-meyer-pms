@@ -258,3 +258,40 @@ def test_post_without_csrf_token_rejected(app, world):
         assert resp.status_code == 400
     finally:
         app.config["WTF_CSRF_ENABLED"] = False
+
+
+# --- GET /dashboard/obligations/<id> — detail page (Ticket 3c §C2) ---
+
+
+def test_detail_renders_200_with_obligation_data(client, world):
+    """Detail page shows the obligation's key fields: status, dates, client, assignee."""
+    oi_id = world["pending_overdue_id"]
+    resp = client.get(f"/dashboard/obligations/{oi_id}")
+    assert resp.status_code == 200
+    body = resp.data.decode()
+    assert "Acme Pty Ltd" in body
+    assert "2026-01-31" in body  # period_end of pending_overdue
+    assert "VAT201" in body
+    assert "PENDING" in body
+    assert "NIEL" in body  # assignee
+
+
+def test_detail_renders_overdue_badge_when_pending_and_past(client, world):
+    """A PENDING row with submission_due_date < TODAY shows the OVERDUE badge —
+    the same is_overdue() helper that drives the list-page badge."""
+    oi_id = world["pending_overdue_id"]
+    resp = client.get(f"/dashboard/obligations/{oi_id}")
+    assert resp.status_code == 200
+    assert b"OVERDUE" in resp.data
+
+
+def test_detail_renders_unassigned_when_no_assignee(client, world):
+    oi_id = world["unassigned_id"]
+    resp = client.get(f"/dashboard/obligations/{oi_id}")
+    assert resp.status_code == 200
+    assert b"Unassigned" in resp.data
+
+
+def test_detail_returns_404_for_nonexistent_id(client, world):
+    resp = client.get("/dashboard/obligations/99999")
+    assert resp.status_code == 404
