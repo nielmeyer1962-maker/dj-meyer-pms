@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from flask_wtf import FlaskForm
-from wtforms import SelectField, SubmitField
+from wtforms import SelectField, SubmitField, TextAreaField, validators
 
 
 class ReassignForm(FlaskForm):
@@ -21,3 +21,18 @@ class ReassignForm(FlaskForm):
         validate_choice=False,  # we validate against active staff in the route
     )
     submit = SubmitField("Reassign")
+
+
+class NotesForm(FlaskForm):
+    """Free-text notes textarea on the obligation detail page.
+
+    4000-char soft cap (PROJECT_PLAN.md §C2): well over a screen of prose,
+    stops accidental megabyte pastes, adjustable later without a migration
+    because the DB column is `Text`.
+    """
+
+    notes = TextAreaField(
+        "Notes",
+        validators=[validators.Optional(), validators.Length(max=4000)],
+    )
+    submit = SubmitField("Save notes")
