@@ -11,6 +11,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    Text,
     UniqueConstraint,
     func,
 )
@@ -85,6 +86,7 @@ class ObligationInstance(db.Model):
         onupdate=func.now(),
         nullable=False,
     )
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Relationships (Python-only, no FK or schema change). selectinload these in
     # query-heavy paths like the dashboard list to avoid N+1.

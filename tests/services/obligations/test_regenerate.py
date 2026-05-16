@@ -244,3 +244,43 @@ def test_mixed_call_method_and_category_change(app):
         for period_end, row in pending.items():
             assert row.submission_due_date == expected[period_end].submission_due_date
             assert row.payment_due_date == expected[period_end].payment_due_date
+
+
+# --- 8) Refresh path preserves notes (Ticket 3c §C2) ---
+
+
+def test_refresh_path_preserves_notes_on_pending(app):
+    """A PENDING row with notes survives the refresh branch of regenerate.
+
+    The refresh branch only writes submission_due_date / payment_due_date on the
+    existing row (see regenerate.py). This test seeds notes on one PENDING row,
+    triggers a config change that forces every PENDING row through the refresh
+    branch (EFILING → MANUAL shifts every due date), and asserts the notes
+    survive untouched. Catches any future refactor that copies whole rows from
+    the generator output (which has notes=None) instead of patching due dates."""
+    with app.app_context():
+        c = _make_client(method=VatSubmissionMethod.EFILING)
+        regenerate(c, today=date(2026, 1, 1))
+        db.session.commit()
+
+        target = _pending_by_period_end(c.id)[date(2026, 4, 30)]
+        target_id = target.id
+        note_text = "Awaiting client signature on VAT201 — chase 2026-05-20."
+        target.notes = note_text
+        db.session.commit()
+
+        c.vat_submission_method = VatSubmissionMethod.MANUAL
+        db.session.commit()
+
+        result = regenerate(c, today=date(2026, 1, 1))
+        db.session.commit()
+
+        assert result.updated > 0  # confirms the refresh branch did run
+
+        refreshed = db.session.get(ObligationInstance, target_id)
+        assert refreshed is not None
+        assert refreshed.notes == note_text
+        # And the refresh branch did update the due date — proves we went through
+        # the patch path, not the no-op path.
+        expected = {inst.period_end: inst for inst in generate_vat201(c, today=date(2026, 1, 1))}
+        assert refreshed.submission_due_date == expected[date(2026, 4, 30)].submission_due_date

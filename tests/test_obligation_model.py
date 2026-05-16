@@ -151,3 +151,34 @@ def test_assignee_fk_set_null_on_staff_delete(app):
         db.session.commit()
         db.session.refresh(oi)
         assert oi.assignee_id is None
+
+
+# --- notes (Ticket 3c §C2) ---
+
+
+def test_notes_column_behaviour(app):
+    """notes defaults to None, persists arbitrary text, and accepts None explicitly."""
+    with app.app_context():
+        c = _make_client()
+
+        # Default: omitted on construction → None after commit.
+        oi_default = ObligationInstance(**_instance_kwargs(c.id, date(2026, 1, 31)))
+        db.session.add(oi_default)
+        db.session.commit()
+        db.session.refresh(oi_default)
+        assert oi_default.notes is None
+
+        # Arbitrary text persists round-trip.
+        text = "Client emailed VAT invoice 2026-04-30; awaiting bank proof of payment."
+        oi_text = ObligationInstance(notes=text, **_instance_kwargs(c.id, date(2026, 2, 28)))
+        db.session.add(oi_text)
+        db.session.commit()
+        db.session.refresh(oi_text)
+        assert oi_text.notes == text
+
+        # Explicit None is accepted at construction time.
+        oi_none = ObligationInstance(notes=None, **_instance_kwargs(c.id, date(2026, 3, 31)))
+        db.session.add(oi_none)
+        db.session.commit()
+        db.session.refresh(oi_none)
+        assert oi_none.notes is None
