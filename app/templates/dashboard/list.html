@@ -42,6 +42,7 @@
   <table class="table table-sm align-middle">
     <thead>
       <tr>
+        <th>ID</th>
         <th>Client</th>
         <th>Type</th>
         <th>Period end</th>
@@ -55,6 +56,10 @@
       {% for oi in instances %}
         {% set overdue = is_overdue(oi, today) %}
         <tr>
+          <td>
+            <a href="{{ url_for('dashboard.obligation_detail', obligation_id=oi.id) }}">#{{ oi.id }}</a>
+            {% if oi.notes %}<span title="Has notes" aria-label="Has notes">📝</span>{% endif %}
+          </td>
           <td>{{ oi.client.legal_name if oi.client else "—" }}</td>
           <td>{{ oi.obligation_type.name }}</td>
           <td>{{ oi.period_end }}</td>
@@ -109,7 +114,7 @@
           </td>
         </tr>
       {% else %}
-        <tr><td colspan="7" class="text-center text-muted">No obligations match the current filters.</td></tr>
+        <tr><td colspan="8" class="text-center text-muted">No obligations match the current filters.</td></tr>
       {% endfor %}
     </tbody>
   </table>

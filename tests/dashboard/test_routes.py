@@ -362,3 +362,61 @@ def test_save_notes_without_csrf_token_rejected(app, world):
         assert resp.status_code == 400
     finally:
         app.config["WTF_CSRF_ENABLED"] = False
+
+
+# --- next=detail round-trips (Ticket 3c §C2 MC4) ---
+
+
+def test_mark_submitted_with_next_detail_redirects_to_detail(client, world):
+    oi_id = world["pending_overdue_id"]
+    resp = client.post(
+        f"/dashboard/obligations/{oi_id}/mark-submitted",
+        data={"next": "detail"},
+    )
+    assert resp.status_code == 302
+    assert resp.headers["Location"].endswith(f"/dashboard/obligations/{oi_id}")
+
+
+def test_mark_paid_with_next_detail_redirects_to_detail(client, world):
+    oi_id = world["submitted_id"]
+    resp = client.post(
+        f"/dashboard/obligations/{oi_id}/mark-paid",
+        data={"next": "detail"},
+    )
+    assert resp.status_code == 302
+    assert resp.headers["Location"].endswith(f"/dashboard/obligations/{oi_id}")
+
+
+def test_mark_exempt_with_next_detail_redirects_to_detail(client, world):
+    oi_id = world["pending_overdue_id"]
+    resp = client.post(
+        f"/dashboard/obligations/{oi_id}/mark-exempt",
+        data={"next": "detail"},
+    )
+    assert resp.status_code == 302
+    assert resp.headers["Location"].endswith(f"/dashboard/obligations/{oi_id}")
+
+
+def test_reassign_with_next_detail_redirects_to_detail(client, world):
+    oi_id = world["pending_overdue_id"]
+    tsego_id = world["tsego_id"]
+    resp = client.post(
+        f"/dashboard/obligations/{oi_id}/reassign",
+        data={"assignee_id": str(tsego_id), "next": "detail"},
+    )
+    assert resp.status_code == 302
+    assert resp.headers["Location"].endswith(f"/dashboard/obligations/{oi_id}")
+
+
+# --- List page renders detail link per row (Ticket 3c §C2 MC4) ---
+
+
+def test_list_renders_detail_link_for_each_row(client, world):
+    """Every row's ID cell wraps the obligation id in an anchor pointing at the
+    detail page — the entry point relied on by MC4's next=detail flow."""
+    resp = client.get("/dashboard/")
+    assert resp.status_code == 200
+    body = resp.data.decode()
+    for key in ("pending_overdue_id", "pending_future_id", "submitted_id", "unassigned_id"):
+        oi_id = world[key]
+        assert f'href="/dashboard/obligations/{oi_id}"' in body

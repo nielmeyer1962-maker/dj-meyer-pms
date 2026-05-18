@@ -113,12 +113,16 @@ def obligation_detail(obligation_id: int):
             selectinload(ObligationInstance.assignee),
         ],
     )
+    active_staff = _active_staff()
+    reassign_form = ReassignForm(assignee_id=str(instance.assignee_id or ""))
+    reassign_form.assignee_id.choices = _reassign_choices(active_staff)
     return render_template(
         "dashboard/detail.html",
         instance=instance,
         today=today_sast(),
         is_overdue=is_overdue,
         notes_form=NotesForm(notes=instance.notes),
+        reassign_form=reassign_form,
     )
 
 
@@ -135,12 +139,16 @@ def update_obligation_notes(obligation_id: int):
     form = NotesForm()
     if not form.validate_on_submit():
         # Re-render so the user keeps their typed text + sees inline errors.
+        active_staff = _active_staff()
+        reassign_form = ReassignForm(assignee_id=str(instance.assignee_id or ""))
+        reassign_form.assignee_id.choices = _reassign_choices(active_staff)
         return render_template(
             "dashboard/detail.html",
             instance=instance,
             today=today_sast(),
             is_overdue=is_overdue,
             notes_form=form,
+            reassign_form=reassign_form,
         )
     raw = (form.notes.data or "").strip()
     instance.notes = raw if raw else None
@@ -158,6 +166,15 @@ def _redirect_to_list_preserving_filters():
     return redirect(url_for("dashboard.list_obligations", **request.args))
 
 
+def _redirect_after_action(instance_id: int):
+    """Honor the hidden `next` field: detail-page forms set next=detail to bounce
+    back to /dashboard/obligations/<id>; list-page forms omit it and fall through
+    to the filter-preserving list redirect (locked decision §11)."""
+    if request.form.get("next") == "detail":
+        return redirect(url_for("dashboard.obligation_detail", obligation_id=instance_id))
+    return _redirect_to_list_preserving_filters()
+
+
 def _apply_transition(obligation_id: int, action) -> None:
     instance = db.get_or_404(ObligationInstance, obligation_id)
     try:
@@ -172,19 +189,19 @@ def _apply_transition(obligation_id: int, action) -> None:
 @bp.post("/obligations/<int:obligation_id>/mark-submitted")
 def mark_obligation_submitted(obligation_id: int):
     _apply_transition(obligation_id, mark_submitted)
-    return _redirect_to_list_preserving_filters()
+    return _redirect_after_action(obligation_id)
 
 
 @bp.post("/obligations/<int:obligation_id>/mark-paid")
 def mark_obligation_paid(obligation_id: int):
     _apply_transition(obligation_id, mark_paid)
-    return _redirect_to_list_preserving_filters()
+    return _redirect_after_action(obligation_id)
 
 
 @bp.post("/obligations/<int:obligation_id>/mark-exempt")
 def mark_obligation_exempt(obligation_id: int):
     _apply_transition(obligation_id, mark_exempt)
-    return _redirect_to_list_preserving_filters()
+    return _redirect_after_action(obligation_id)
 
 
 @bp.post("/obligations/<int:obligation_id>/reassign")
@@ -207,4 +224,4 @@ def reassign_obligation(obligation_id: int):
         instance.assignee_id = staff.id
     db.session.commit()
     flash(f"Obligation {instance.id} reassigned.", "success")
-    return _redirect_to_list_preserving_filters()
+    return _redirect_after_action(obligation_id)
