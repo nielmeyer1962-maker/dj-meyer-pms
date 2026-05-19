@@ -1002,8 +1002,6 @@ Items below have no reserved slot yet — they wait until concrete demand surfac
 
 - **Ticket 3f (reserved): AFS preparation deadline tracking** — annual obligation per active client, due six months after financial year-end. Same model and dashboard surface; new `ObligationType.AFS` and generator.
 
-- **Ticket 3g (reserved): Ad-hoc client task tracking** — non-statutory work items (letters, document requests, follow-ups) originating from reception or staff. Same dashboard surface as obligations; new `ObligationType.TASK` with null-allowed `period_start` / `period_end` and a user-provided due date. Origin: typed in, not generated.
-
 ### Decisions locked in for Ticket 3c (per Daniel)
 
 1. **Three categories on every regenerate call:** add, refresh, prune. Terminal-state rows are never touched.
@@ -1016,3 +1014,211 @@ Items below have no reserved slot yet — they wait until concrete demand surfac
 8. **Notes indicator on the list is a small inline icon next to the obligation ID** when `notes` is non-empty and non-whitespace. No preview snippet, no separate column.
 9. **Deferred work has explicit ticket slots:** Ticket 3d for transition metadata; Ticket 3e for dashboard filter polish. Items beyond 3e have no reserved slot until demand surfaces.
 10. **Build order: C1 → C2.** Each chunk has integration value at its merge point.
+
+## Ticket 3g — Ad-hoc client task tracking
+
+**Goal.** Add non-statutory work items (letters, document requests, follow-ups, ad-hoc client questions) as a first-class concept alongside statutory obligations, with their own model, own dashboard page at `/dashboard/tasks`, and a full CRUD UI — so that work originating from reception or staff stops living in email and starts living in the system.
+
+**Scope discipline.** Tasks are **operational**, obligations are **statutory**. Ticket 3g introduces a separate `Task` model and `tasks` table — it does **not** extend `ObligationInstance` and does **not** add a new `ObligationType`. The two concepts live side by side. The main `/dashboard` view stays obligation-only; tasks get their own page. A future ticket may add a unified "all the work due this week" view — deferred, not in scope here.
+
+**Builds on 3a–3c, does not change them.** No obligation invariant is loosened. No obligation schema change. The 3c regenerate service, the obligation transitions service, the obligation detail page — all untouched. The only cross-cutting change is one extra link in the main navigation, added in Chunk 3.
+
+**Build order: Chunk 1 → Chunk 2 → Chunk 3, across separate sessions.**
+
+### Chunk 1 (THIS SESSION) — Task model + Alembic migration + model-layer tests
+
+**Pillar.** Pure schema foundation. After this chunk, a `Task` row can be constructed and persisted in a test or shell, but there is no route, no form, no template, and no user-facing way to create one. Same scope shape as Ticket 3c Chunk C2-step-1 (`e211a5f`, "add notes column to ObligationInstance"): model + migration + model tests, nothing else.
+
+**Schema — new table `tasks`:**
+
+| Column | Type | Nullable | Default | Notes |
+|---|---|---|---|---|
+| `id` | `Integer` | No | — | PK |
+| `client_id` | `Integer` FK `clients.id` ON DELETE RESTRICT | No | — | Indexed. RESTRICT mirrors `obligation_instances.client_id` — never lose task history because of an accidental client delete. |
+| `title` | `String(200)` | No | — | Short label shown on list rows. 200-char hard cap at the DB level; form-layer cap matches. |
+| `description` | `Text` | Yes | — | Long-form detail. No DB cap; form-layer soft cap 4000 chars (same as obligations `notes`). |
+| `due_date` | `Date` | No | — | User-supplied. No business-day calculation — unlike obligations. |
+| `status` | `Enum(TaskStatus)` | No | `TaskStatus.OPEN` | New `TaskStatus` enum: `OPEN`, `DONE`, `CANCELLED`. Separate from `ObligationStatus`. |
+| `assignee_id` | `Integer` FK `staff.id` ON DELETE SET NULL | Yes | — | Indexed. SET NULL mirrors obligations: hard-deleting staff reverts open tasks to unassigned. |
+| `notes` | `Text` | Yes | — | Free-form operational notes. Form-layer soft cap 4000 chars (same as `obligation_instances.notes`). |
+| `requested_by` | `String(120)` | Yes | — | Free-text "who asked for this" — reception, the client themselves, a partner. Single nullable field; structured request-source deferred. |
+| `created_at` | `DateTime(timezone=True)` | No | `func.now()` | Stored UTC; display in `Africa/Johannesburg`. |
+| `updated_at` | `DateTime(timezone=True)` | No | `func.now()`, `onupdate=func.now()` | Auto-advances on any mutation, same pattern as obligations. |
+
+**Indexes:**
+
+- Implicit on `client_id` (column-level `index=True`).
+- Implicit on `assignee_id` (column-level `index=True`).
+- Composite `ix_tasks_status_due_date` on `(status, due_date)` — supports the future list query "OPEN tasks due in the next N days" and the OVERDUE read-time predicate (`status == OPEN AND due_date < today_in_Africa_Johannesburg`).
+
+**No uniqueness constraint.** Unlike obligations, tasks are not generated and have no natural idempotency key. Two tasks with the same title, client, and due_date are legitimate (e.g., "Send tax certificate request" twice in a year).
+
+**Model — new file `app/models/task.py`:**
+
+```python
+class TaskStatus(enum.Enum):
+    OPEN = "OPEN"
+    DONE = "DONE"
+    CANCELLED = "CANCELLED"
+
+
+class Task(db.Model):
+    __tablename__ = "tasks"
+    # columns as above
+    client: Mapped[Client] = relationship("Client", lazy="select")
+    assignee: Mapped[Staff | None] = relationship("Staff", lazy="select")
+```
+
+`Task` is registered in `app/models/__init__.py` so Alembic autogenerate sees it.
+
+**Migration.** Single autogenerated Alembic revision creates the `tasks` table, the two FKs, and the composite index. Existing data untouched.
+
+**Files created/modified in Chunk 1:**
+
+- `app/models/task.py` — new file: `TaskStatus` enum + `Task` model.
+- `app/models/__init__.py` — re-export `Task`, `TaskStatus`.
+- `migrations/versions/<rev>_add_tasks_table.py` — autogenerated.
+- `tests/test_task_model.py` — new test module (see below).
+
+**Tests for Chunk 1 (`tests/test_task_model.py`):**
+
+- Construct a minimal `Task` (only mandatory fields: `client_id`, `title`, `due_date`) — persists, `status` defaults to `TaskStatus.OPEN`, `created_at` / `updated_at` are set to non-null UTC datetimes.
+- Construct a `Task` with all nullable fields explicitly `None` — persists.
+- Construct a `Task` with every field populated — round-trips.
+- Two `Task` rows with identical `(client_id, title, due_date)` — both persist (no uniqueness constraint).
+- `TaskStatus` enum has exactly three members in order `OPEN`, `DONE`, `CANCELLED`.
+- `Task.client` relationship resolves to the seeded `Client`; `Task.assignee` resolves to seeded `Staff` and to `None` when `assignee_id` is null.
+- `updated_at` advances when any column is mutated (flush, re-query, compare).
+- Deleting the parent `Client` while a `Task` references it raises an `IntegrityError` (RESTRICT).
+- Deleting the parent `Staff` while a `Task` references it nulls `assignee_id` (SET NULL), `Task` row remains.
+
+### Chunk 2 (NEXT SESSION) — Tasks blueprint with full CRUD + transitions service
+
+**Pillar.** Make tasks usable end-to-end through a UI at `/dashboard/tasks`. Three sub-pillars:
+
+1. **Transitions service** (`app/services/tasks/transitions.py`) mirroring `app/services/obligations/transitions.py`. Three free functions: `open_task`, `mark_done`, `cancel_task`. **Full state-graph reversibility** per the locked service-layer-only decision: any non-target state may transition to the target, including walking `DONE → OPEN` and `CANCELLED → OPEN`. Idempotent calls (current == target) raise `ValueError`, matching the obligations service.
+2. **Blueprint** (`app/tasks/`, registered at URL prefix `/dashboard/tasks/`): list, detail, create, edit routes + transition POST endpoints.
+3. **Templates**: list, detail, create, edit forms + an OVERDUE badge derived at read time from `status == OPEN AND due_date < today_sast()`.
+
+**Editability decision applied.** Every Task field is editable on the detail page via an "Edit" form: `title`, `description`, `due_date`, `assignee_id`, `requested_by`, `notes`. Status is only changed through the three transition buttons (`Mark done`, `Cancel`, `Re-open`). Tasks differ from 3c obligations here — 3c restricted the detail page to notes-only editing.
+
+**Routes (new `app/tasks/routes.py`):**
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/dashboard/tasks/` | List tasks. Filters: status (multi), assignee, client, custom date range. Default view: OPEN only. |
+| GET | `/dashboard/tasks/new` | Create form. Optional `?client_id=` query param to pre-select. |
+| POST | `/dashboard/tasks/new` | Create handler. Redirect to detail page on success. |
+| GET | `/dashboard/tasks/<int:task_id>` | Detail page (read-only render + edit form + transition buttons). |
+| POST | `/dashboard/tasks/<int:task_id>/edit` | Update all editable fields. Status untouched. |
+| POST | `/dashboard/tasks/<int:task_id>/done` | Calls `mark_done`; redirect to detail. |
+| POST | `/dashboard/tasks/<int:task_id>/cancel` | Calls `cancel_task`; redirect to detail. |
+| POST | `/dashboard/tasks/<int:task_id>/reopen` | Calls `open_task`; redirect to detail. |
+
+**Forms (`app/tasks/forms.py`):**
+
+- `TaskCreateForm` — `client_id` (SelectField, required), `title` (StringField, required, max 200), `due_date` (DateField, required), `description` (TextAreaField, optional, max 4000), `assignee_id` (SelectField, optional), `requested_by` (StringField, optional, max 120), `notes` (TextAreaField, optional, max 4000).
+- `TaskEditForm` — same fields, all editable. No status field.
+
+**Templates (`app/templates/tasks/`):**
+
+- `list.html` — table of tasks with status badge (including OVERDUE), client, title, due_date, assignee, action column. Reuses the dashboard's filter chip styling.
+- `detail.html` — full task render, edit form, transition buttons. OVERDUE badge derived at render time.
+- `new.html` — `TaskCreateForm` render.
+- `_form_fields.html` — shared partial for create/edit field rendering (Jinja `include`).
+
+**Transitions service (`app/services/tasks/transitions.py`):**
+
+```python
+def open_task(task: Task) -> None:
+    """Any non-OPEN → OPEN. Raises ValueError if already OPEN."""
+
+def mark_done(task: Task) -> None:
+    """Any non-DONE → DONE. Raises ValueError if already DONE."""
+
+def cancel_task(task: Task) -> None:
+    """Any non-CANCELLED → CANCELLED. Raises ValueError if already CANCELLED."""
+```
+
+No DB CHECK constraint, no `before_update` listener — direct ORM writes remain the admin-override escape hatch. Same pattern documented in the obligations transitions module.
+
+**Files created/modified in Chunk 2 (likely 3–4 micro-commits):**
+
+- `app/services/tasks/__init__.py` — new package.
+- `app/services/tasks/transitions.py` — `open_task`, `mark_done`, `cancel_task`.
+- `app/tasks/__init__.py` — blueprint `tasks = Blueprint("tasks", __name__, url_prefix="/dashboard/tasks")`.
+- `app/tasks/routes.py` — eight route handlers above.
+- `app/tasks/forms.py` — `TaskCreateForm`, `TaskEditForm`.
+- `app/templates/tasks/list.html`, `detail.html`, `new.html`, `_form_fields.html` — new templates.
+- `app/__init__.py` — register the `tasks` blueprint.
+- `tests/services/tasks/test_transitions.py` — new test module.
+- `tests/tasks/test_routes.py` — new test module.
+
+**Tests for Chunk 2:**
+
+*Transitions (`tests/services/tasks/test_transitions.py`):*
+
+- Each of the six legal transitions executes and mutates `status` (`OPEN→DONE`, `OPEN→CANCELLED`, `DONE→OPEN`, `DONE→CANCELLED`, `CANCELLED→OPEN`, `CANCELLED→DONE`).
+- Each idempotent call (`open_task` on OPEN, `mark_done` on DONE, `cancel_task` on CANCELLED) raises `ValueError` with the task id and current status in the message.
+- `updated_at` advances after a transition (via flush + re-query).
+
+*Routes (`tests/tasks/test_routes.py`):*
+
+- `GET /dashboard/tasks/` 200, default filter shows OPEN only.
+- `GET /dashboard/tasks/?status=DONE` filters correctly.
+- `GET /dashboard/tasks/new` renders form; `?client_id=42` pre-selects client 42.
+- `POST /dashboard/tasks/new` with valid payload persists, redirects to detail.
+- `POST /dashboard/tasks/new` missing `title` or `due_date` re-renders with validation error.
+- `GET /dashboard/tasks/<id>` for existing id renders 200 with all field values.
+- `GET /dashboard/tasks/<id>` for non-existent id returns 404.
+- `POST /dashboard/tasks/<id>/edit` updates every editable field; status untouched.
+- `POST /dashboard/tasks/<id>/edit` rejects oversize fields (title > 200, notes > 4000, etc.).
+- `POST /dashboard/tasks/<id>/done` on OPEN task → status `DONE`, redirect to detail.
+- `POST /dashboard/tasks/<id>/done` on already-DONE task → flashes error, status unchanged.
+- `POST /dashboard/tasks/<id>/reopen` on DONE task → status `OPEN`.
+- `POST /dashboard/tasks/<id>/reopen` on CANCELLED task → status `OPEN`.
+- OVERDUE rendering: an OPEN task with `due_date < today_sast()` shows the OVERDUE badge; a DONE task with the same `due_date` does not.
+- CSRF: every POST without token returns 400.
+
+### Chunk 3 (LATER) — Main nav link + integration polish
+
+**Pillar.** A single navigation link plus whatever small polish surfaces at the end of Chunk 2. Likely one or two micro-commits.
+
+**Files created/modified in Chunk 3:**
+
+- `app/templates/base.html` (or wherever the main nav lives — confirmed at start of chunk) — add `Tasks` link to `/dashboard/tasks/`.
+- Whatever polish Chunk 2 surfaces. Examples that may or may not be needed: "Add task" affordance on the client detail page; default-sort tweak on the task list; OVERDUE count badge in the nav. **Scope confirmed at start of Chunk 3, not pre-committed here.**
+
+**Tests for Chunk 3:**
+
+- Smoke test: `GET /` (or wherever nav renders) contains the tasks link.
+- Any polish-specific tests added with their feature.
+
+### Out of scope for Ticket 3g
+
+- **Unified obligations + tasks dashboard view.** Reserved as a future ticket — Tickets 3a–3g intentionally keep the two concepts separate.
+- **Recurring tasks** (a task template that re-emits a new instance every N weeks). If demanded, becomes its own ticket — adds a `TaskTemplate` model, a generator, and idempotency rules akin to obligations.
+- **Structured request-source.** Today: single nullable `requested_by` free-text field. A typed `RequestSource` enum (RECEPTION / EMAIL / PHONE / WALK-IN / STAFF) is deferred until demand surfaces.
+- **File attachments / document upload.** Document management is explicitly out of scope per `CLAUDE.md`.
+- **Task comments / threaded notes.** Single `notes` Text column today; a comment thread is a separate ticket.
+- **Email-the-assignee notifications on task create / due-soon / overdue.** SMTP plumbing is a separate ticket, same as for obligations.
+- **Bulk operations** (bulk-assign, bulk-cancel).
+- **iCal export / calendar integration.**
+- **Auditing of who-changed-what on tasks.** The `updated_at` timestamp is a single snapshot, not a history table.
+- **Auto-assignment rules.** Unlike obligations (where Tsego owns all CIPC), tasks are manually assigned in 3g. Auto-assignment rules wait for a real pattern to emerge.
+
+### Decisions locked in for Ticket 3g (per Daniel)
+
+1. **Separate `Task` model and `tasks` table, NOT extending `ObligationInstance`.** Clean semantic separation: obligations are statutory, tasks are operational.
+2. **Three states only:** `OPEN`, `DONE`, `CANCELLED`. New `TaskStatus` enum, distinct from `ObligationStatus`.
+3. **Mandatory fields:** `client_id`, `title`, `due_date`, `created_at`, `status`. **Nullable:** `description`, `assignee_id`, `notes`, `requested_by`. Plus `updated_at` (auto-set, NOT NULL).
+4. **Request-source is one nullable `requested_by` free-text field.** Structured enum deferred.
+5. **UI placement:** new `tasks` blueprint registered at URL prefix `/dashboard/tasks/`. Linked from main nav in Chunk 3. The main `/dashboard` obligations view is untouched.
+6. **State graph is service-layer-only and fully reversible.** Same philosophy as obligations per `project_state_transitions_service_layer_only.md`: no DB CHECK, no model guard, no event listener. The three transition functions (`open_task`, `mark_done`, `cancel_task`) raise on idempotent calls. Direct ORM writes are the admin-override escape hatch.
+7. **All Task fields editable on the detail page** via an Edit form. Status changes only through the three transition buttons. (Diverges from 3c, which restricted the detail page to notes-only editing.)
+8. **No uniqueness constraint on `tasks`.** Tasks are not generated and duplicates with the same client + title + due_date are legitimate.
+9. **Build order: Chunk 1 → Chunk 2 → Chunk 3, across separate sessions.** Chunk 1 (this session) is schema + model + tests only, no user-facing surface — matches the shape of Ticket 3c C2-step-1.
+10. **`title` is `String(200)` with form-layer cap 200.** 200 chars covers a short list-row label; the form-layer cap matches the DB cap so over-long input never reaches the database.
+11. **`requested_by` is `String(120)` with form-layer cap 120.** Name-length-ish — fits a typed-in person name or "Reception" without truncation.
+12. **`description` is `Text` with form-layer soft cap 4000 chars** (matches `obligation_instances.notes`). No DB-level cap; the soft cap stops accidental megabyte pastes.
+13. **Composite index `ix_tasks_status_due_date` on `(status, due_date)`** — supports the OVERDUE / "due soon" read-time predicates and the future "OPEN tasks due in the next N days" list query.
