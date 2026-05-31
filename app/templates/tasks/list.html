@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Tasks — DJ Meyer PMS{% endblock %}
+{% block content %}
+<h1 class="h3 mb-4">Tasks</h1>
+
+<div class="table-responsive">
+  <table class="table table-sm align-middle">
+    <thead>
+      <tr>
+        <th>ID</th>
+        <th>Client</th>
+        <th>Title</th>
+        <th>Due</th>
+        <th>Assignee</th>
+        <th>Status</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for task in tasks %}
+        <tr>
+          <td>#{{ task.id }}</td>
+          <td>{{ task.client.legal_name if task.client else "—" }}</td>
+          <td>{{ task.title }}</td>
+          <td>{{ task.due_date }}</td>
+          <td>
+            {% if task.assignee %}
+              {{ task.assignee.code }}
+            {% else %}
+              <span class="text-muted">Unassigned</span>
+            {% endif %}
+          </td>
+          <td><span class="badge bg-secondary">{{ task.status.name }}</span></td>
+        </tr>
+      {% else %}
+        <tr><td colspan="6" class="text-center text-muted">No tasks yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}
