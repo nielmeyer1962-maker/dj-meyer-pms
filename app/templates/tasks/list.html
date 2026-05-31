@@ -3,38 +3,40 @@
 {% block content %}
 <h1 class="h3 mb-4">Tasks</h1>
 
-<div class="table-responsive">
-  <table class="table table-sm align-middle">
-    <thead>
-      <tr>
-        <th>ID</th>
-        <th>Client</th>
-        <th>Title</th>
-        <th>Due</th>
-        <th>Assignee</th>
-        <th>Status</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for task in tasks %}
+{% for status_name in ["OPEN", "DONE", "CANCELLED"] %}
+  {% set rows = tasks | selectattr("status.name", "equalto", status_name) | list %}
+  <h2 class="h5 mt-4">{{ status_name }} ({{ rows | length }})</h2>
+  <div class="table-responsive">
+    <table class="table table-sm align-middle">
+      <thead>
         <tr>
-          <td>#{{ task.id }}</td>
-          <td>{{ task.client.legal_name if task.client else "—" }}</td>
-          <td>{{ task.title }}</td>
-          <td>{{ task.due_date }}</td>
-          <td>
-            {% if task.assignee %}
-              {{ task.assignee.code }}
-            {% else %}
-              <span class="text-muted">Unassigned</span>
-            {% endif %}
-          </td>
-          <td><span class="badge bg-secondary">{{ task.status.name }}</span></td>
+          <th>ID</th>
+          <th>Client</th>
+          <th>Title</th>
+          <th>Due</th>
+          <th>Assignee</th>
         </tr>
-      {% else %}
-        <tr><td colspan="6" class="text-center text-muted">No tasks yet.</td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
-</div>
+      </thead>
+      <tbody>
+        {% for task in rows %}
+          <tr>
+            <td>#{{ task.id }}</td>
+            <td>{{ task.client.legal_name if task.client else "—" }}</td>
+            <td>{{ task.title }}</td>
+            <td>{{ task.due_date }}</td>
+            <td>
+              {% if task.assignee %}
+                {{ task.assignee.code }}
+              {% else %}
+                <span class="text-muted">Unassigned</span>
+              {% endif %}
+            </td>
+          </tr>
+        {% else %}
+          <tr><td colspan="5" class="text-center text-muted">No tasks in this status.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% endfor %}
 {% endblock %}
