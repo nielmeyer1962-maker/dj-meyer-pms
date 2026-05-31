@@ -31,3 +31,5 @@ seed.py
 .idea/
 *.swp
 .claude/
+Tools/
+drafts/
