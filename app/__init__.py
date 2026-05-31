@@ -15,8 +15,8 @@ def create_app(config: type = Config) -> Flask:
     # Models without blueprints are imported here so they register with db.metadata.
     from app.clients.routes import bp as clients_bp
     from app.dashboard.routes import bp as dashboard_bp
-    from app.tasks.routes import bp as tasks_bp
     from app.models import obligation, staff  # noqa: F401
+    from app.tasks.routes import bp as tasks_bp
 
     app.register_blueprint(clients_bp)
     app.register_blueprint(dashboard_bp)

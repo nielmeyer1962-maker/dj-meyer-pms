@@ -5,6 +5,8 @@ from sqlalchemy.orm import selectinload
 
 from app.extensions import db
 from app.models.task import Task
+from app.services.tasks.predicates import is_overdue
+from app.utils.dates import today_sast
 
 bp = Blueprint("tasks", __name__, url_prefix="/dashboard/tasks")
 
@@ -21,4 +23,9 @@ def list_tasks():
         )
         .order_by(Task.due_date.asc())
     ).all()
-    return render_template("tasks/list.html", tasks=tasks)
+    return render_template(
+        "tasks/list.html",
+        tasks=tasks,
+        today=today_sast(),
+        is_overdue=is_overdue,
+    )

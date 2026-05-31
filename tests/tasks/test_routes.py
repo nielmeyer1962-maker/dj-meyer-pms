@@ -79,3 +79,41 @@ def test_list_tasks_groups_by_status(client):
     assert open_header < body.index("Open task") < done_header
     assert done_header < body.index("Done task") < cancelled_header
     assert cancelled_header < body.index("Cancelled task")
+
+
+def test_open_task_past_due_shows_overdue_badge(client):
+    """An OPEN task whose due_date is clearly in the past renders the Overdue
+    badge (status == OPEN AND due_date < today_sast())."""
+    c = _make_client()
+    db.session.add(
+        Task(
+            client_id=c.id,
+            title="Submit IRP6 provisional",
+            due_date=date(2024, 1, 1),
+            status=TaskStatus.OPEN,
+        )
+    )
+    db.session.commit()
+
+    body = client.get("/dashboard/tasks/").data.decode()
+    assert "Submit IRP6 provisional" in body
+    assert "Overdue" in body
+
+
+def test_done_task_past_due_no_overdue_badge(client):
+    """A DONE task with the same past due_date is not overdue — overdue is
+    OPEN-only — so the badge renders nowhere on the page."""
+    c = _make_client()
+    db.session.add(
+        Task(
+            client_id=c.id,
+            title="Filed ITR14",
+            due_date=date(2024, 1, 1),
+            status=TaskStatus.DONE,
+        )
+    )
+    db.session.commit()
+
+    body = client.get("/dashboard/tasks/").data.decode()
+    assert "Filed ITR14" in body
+    assert "Overdue" not in body

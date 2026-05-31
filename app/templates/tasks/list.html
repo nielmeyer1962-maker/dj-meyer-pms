@@ -23,7 +23,12 @@
             <td>#{{ task.id }}</td>
             <td>{{ task.client.legal_name if task.client else "—" }}</td>
             <td>{{ task.title }}</td>
-            <td>{{ task.due_date }}</td>
+            <td>
+              {{ task.due_date }}
+              {% if is_overdue(task, today) %}
+                <span class="badge bg-danger ms-1">Overdue</span>
+              {% endif %}
+            </td>
             <td>
               {% if task.assignee %}
                 {{ task.assignee.code }}
