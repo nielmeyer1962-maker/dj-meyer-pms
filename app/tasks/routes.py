@@ -7,7 +7,7 @@ from app.extensions import db
 from app.models.task import Task, TaskStatus
 from app.services.tasks.predicates import is_overdue, overdue_filter
 from app.utils.dates import today_sast
-from app.utils.staff import get_active_staff, UNASSIGNED_SENTINEL
+from app.utils.staff import UNASSIGNED_SENTINEL, get_active_staff
 
 bp = Blueprint("tasks", __name__, url_prefix="/dashboard/tasks")
 

@@ -17,7 +17,7 @@ from app.services.obligations.transitions import (
     mark_submitted,
 )
 from app.utils.dates import today_sast
-from app.utils.staff import get_active_staff, UNASSIGNED_SENTINEL
+from app.utils.staff import UNASSIGNED_SENTINEL, get_active_staff
 
 bp = Blueprint("dashboard", __name__, url_prefix="/dashboard")
 

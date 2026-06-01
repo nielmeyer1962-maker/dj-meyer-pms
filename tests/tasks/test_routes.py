@@ -118,13 +118,18 @@ def test_done_task_past_due_no_overdue_badge(client):
     assert "Filed ITR14" in body
     assert 'class="badge bg-danger ms-1">Overdue</span>' not in body
 
+
 def test_filter_by_status_open(client):
     """?status=OPEN shows only OPEN tasks."""
     c = _make_client()
     db.session.add_all(
         [
-            Task(client_id=c.id, title="Open one", due_date=date(2026, 7, 1), status=TaskStatus.OPEN),
-            Task(client_id=c.id, title="Done one", due_date=date(2026, 7, 1), status=TaskStatus.DONE),
+            Task(
+                client_id=c.id, title="Open one", due_date=date(2026, 7, 1), status=TaskStatus.OPEN
+            ),
+            Task(
+                client_id=c.id, title="Done one", due_date=date(2026, 7, 1), status=TaskStatus.DONE
+            ),
         ]
     )
     db.session.commit()
@@ -146,7 +151,9 @@ def test_filter_by_assignee_staff_code(client):
 
     db.session.add_all(
         [
-            Task(client_id=c.id, title="Alice task", due_date=date(2026, 7, 1), assignee_id=alice.id),
+            Task(
+                client_id=c.id, title="Alice task", due_date=date(2026, 7, 1), assignee_id=alice.id
+            ),
             Task(client_id=c.id, title="Bob task", due_date=date(2026, 7, 1), assignee_id=bob.id),
         ]
     )
@@ -168,7 +175,12 @@ def test_filter_by_assignee_unassigned(client):
 
     db.session.add_all(
         [
-            Task(client_id=c.id, title="Has assignee", due_date=date(2026, 7, 1), assignee_id=alice.id),
+            Task(
+                client_id=c.id,
+                title="Has assignee",
+                due_date=date(2026, 7, 1),
+                assignee_id=alice.id,
+            ),
             Task(client_id=c.id, title="No assignee", due_date=date(2026, 7, 1), assignee_id=None),
         ]
     )
@@ -184,9 +196,21 @@ def test_filter_view_overdue(client):
     c = _make_client()
     db.session.add_all(
         [
-            Task(client_id=c.id, title="Overdue open", due_date=date(2024, 1, 1), status=TaskStatus.OPEN),
-            Task(client_id=c.id, title="Future open", due_date=date(2099, 12, 31), status=TaskStatus.OPEN),
-            Task(client_id=c.id, title="Past done", due_date=date(2024, 1, 1), status=TaskStatus.DONE),
+            Task(
+                client_id=c.id,
+                title="Overdue open",
+                due_date=date(2024, 1, 1),
+                status=TaskStatus.OPEN,
+            ),
+            Task(
+                client_id=c.id,
+                title="Future open",
+                due_date=date(2099, 12, 31),
+                status=TaskStatus.OPEN,
+            ),
+            Task(
+                client_id=c.id, title="Past done", due_date=date(2024, 1, 1), status=TaskStatus.DONE
+            ),
         ]
     )
     db.session.commit()
@@ -195,6 +219,3 @@ def test_filter_view_overdue(client):
     assert "Overdue open" in body
     assert "Future open" not in body
     assert "Past done" not in body
-
-
-    
