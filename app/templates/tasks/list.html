@@ -3,6 +3,39 @@
 {% block content %}
 <h1 class="h3 mb-4">Tasks</h1>
 
+<form method="get" class="row g-2 mb-4">
+  <div class="col-md-3">
+    <label for="filter-status" class="form-label">Status</label>
+    <select id="filter-status" name="status" class="form-select form-select-sm">
+      <option value="">All</option>
+      {% for s in statuses %}
+        <option value="{{ s.name }}" {% if current_status == s.name %}selected{% endif %}>{{ s.name }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="col-md-3">
+    <label for="filter-assignee" class="form-label">Assignee</label>
+    <select id="filter-assignee" name="assignee" class="form-select form-select-sm">
+      <option value="">All</option>
+      <option value="{{ unassigned_sentinel }}" {% if current_assignee == unassigned_sentinel %}selected{% endif %}>Unassigned</option>
+      {% for s in active_staff %}
+        <option value="{{ s.code }}" {% if current_assignee == s.code %}selected{% endif %}>{{ s.code }} — {{ s.full_name }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="col-md-3">
+    <label for="filter-view" class="form-label">View</label>
+    <select id="filter-view" name="view" class="form-select form-select-sm">
+      <option value="" {% if not current_view %}selected{% endif %}>All</option>
+      <option value="overdue" {% if current_view == 'overdue' %}selected{% endif %}>Overdue</option>
+    </select>
+  </div>
+  <div class="col-md-3 d-flex align-items-end">
+    <button type="submit" class="btn btn-sm btn-primary">Apply</button>
+    <a href="{{ url_for('tasks.list_tasks') }}" class="btn btn-sm btn-outline-secondary ms-2">Reset</a>
+  </div>
+</form>
+
 {% for status_name in ["OPEN", "DONE", "CANCELLED"] %}
   {% set rows = tasks | selectattr("status.name", "equalto", status_name) | list %}
   <h2 class="h5 mt-4">{{ status_name }} ({{ rows | length }})</h2>

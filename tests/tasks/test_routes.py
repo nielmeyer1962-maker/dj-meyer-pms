@@ -116,4 +116,85 @@ def test_done_task_past_due_no_overdue_badge(client):
 
     body = client.get("/dashboard/tasks/").data.decode()
     assert "Filed ITR14" in body
-    assert "Overdue" not in body
+    assert 'class="badge bg-danger ms-1">Overdue</span>' not in body
+
+def test_filter_by_status_open(client):
+    """?status=OPEN shows only OPEN tasks."""
+    c = _make_client()
+    db.session.add_all(
+        [
+            Task(client_id=c.id, title="Open one", due_date=date(2026, 7, 1), status=TaskStatus.OPEN),
+            Task(client_id=c.id, title="Done one", due_date=date(2026, 7, 1), status=TaskStatus.DONE),
+        ]
+    )
+    db.session.commit()
+
+    body = client.get("/dashboard/tasks/?status=OPEN").data.decode()
+    assert "Open one" in body
+    assert "Done one" not in body
+
+
+def test_filter_by_assignee_staff_code(client):
+    """?assignee=<code> shows only tasks assigned to that staff member."""
+    from app.models.staff import Staff, StaffRole
+
+    c = _make_client()
+    alice = Staff(code="ALI", full_name="Alice Smith", role=StaffRole.TAX, active=True)
+    bob = Staff(code="BOB", full_name="Bob Jones", role=StaffRole.TAX, active=True)
+    db.session.add_all([alice, bob])
+    db.session.commit()
+
+    db.session.add_all(
+        [
+            Task(client_id=c.id, title="Alice task", due_date=date(2026, 7, 1), assignee_id=alice.id),
+            Task(client_id=c.id, title="Bob task", due_date=date(2026, 7, 1), assignee_id=bob.id),
+        ]
+    )
+    db.session.commit()
+
+    body = client.get("/dashboard/tasks/?assignee=ALI").data.decode()
+    assert "Alice task" in body
+    assert "Bob task" not in body
+
+
+def test_filter_by_assignee_unassigned(client):
+    """?assignee=__unassigned__ shows only tasks with no assignee."""
+    from app.models.staff import Staff, StaffRole
+
+    c = _make_client()
+    alice = Staff(code="ALI", full_name="Alice Smith", role=StaffRole.TAX, active=True)
+    db.session.add(alice)
+    db.session.commit()
+
+    db.session.add_all(
+        [
+            Task(client_id=c.id, title="Has assignee", due_date=date(2026, 7, 1), assignee_id=alice.id),
+            Task(client_id=c.id, title="No assignee", due_date=date(2026, 7, 1), assignee_id=None),
+        ]
+    )
+    db.session.commit()
+
+    body = client.get("/dashboard/tasks/?assignee=__unassigned__").data.decode()
+    assert "No assignee" in body
+    assert "Has assignee" not in body
+
+
+def test_filter_view_overdue(client):
+    """?view=overdue shows only tasks that are OPEN AND due in the past."""
+    c = _make_client()
+    db.session.add_all(
+        [
+            Task(client_id=c.id, title="Overdue open", due_date=date(2024, 1, 1), status=TaskStatus.OPEN),
+            Task(client_id=c.id, title="Future open", due_date=date(2099, 12, 31), status=TaskStatus.OPEN),
+            Task(client_id=c.id, title="Past done", due_date=date(2024, 1, 1), status=TaskStatus.DONE),
+        ]
+    )
+    db.session.commit()
+
+    body = client.get("/dashboard/tasks/?view=overdue").data.decode()
+    assert "Overdue open" in body
+    assert "Future open" not in body
+    assert "Past done" not in body
+
+
+    
