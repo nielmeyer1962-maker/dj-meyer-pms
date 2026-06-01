@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Task {{ task.id }} — DJ Meyer PMS{% endblock %}
+{% block content %}
+{% set overdue = is_overdue(task, today) %}
+
+<nav aria-label="breadcrumb" class="mb-3">
+  <ol class="breadcrumb">
+    <li class="breadcrumb-item">
+      <a href="{{ url_for('tasks.list_tasks') }}">Tasks</a>
+    </li>
+    <li class="breadcrumb-item active" aria-current="page">#{{ task.id }}</li>
+  </ol>
+</nav>
+
+<h1 class="h3 mb-4">
+  {{ task.title }}
+  <span class="badge bg-secondary ms-2">{{ task.status.name }}</span>
+  {% if overdue %}
+    <span class="badge bg-danger ms-1">Overdue</span>
+  {% endif %}
+</h1>
+
+<dl class="row">
+  <dt class="col-sm-3">Client</dt>
+  <dd class="col-sm-9">{{ task.client.legal_name if task.client else "—" }}</dd>
+
+  <dt class="col-sm-3">Due date</dt>
+  <dd class="col-sm-9">{{ task.due_date }}</dd>
+
+  <dt class="col-sm-3">Assignee</dt>
+  <dd class="col-sm-9">
+    {% if task.assignee %}
+      {{ task.assignee.code }} — {{ task.assignee.full_name }}
+    {% else %}
+      <span class="text-muted">Unassigned</span>
+    {% endif %}
+  </dd>
+
+  <dt class="col-sm-3">Requested by</dt>
+  <dd class="col-sm-9">{{ task.requested_by or "—" }}</dd>
+
+  <dt class="col-sm-3">Description</dt>
+  <dd class="col-sm-9" style="white-space: pre-wrap;">{{ task.description or "—" }}</dd>
+
+  <dt class="col-sm-3">Notes</dt>
+  <dd class="col-sm-9" style="white-space: pre-wrap;">{{ task.notes or "—" }}</dd>
+</dl>
+{% endblock %}

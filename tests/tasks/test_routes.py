@@ -219,3 +219,22 @@ def test_filter_view_overdue(client):
     assert "Overdue open" in body
     assert "Future open" not in body
     assert "Past done" not in body
+
+
+def test_task_detail_returns_200_and_renders_for_existing_task(client):
+    """GET /dashboard/tasks/<id> for an existing task: 200 + the task title
+    appears in the rendered detail page."""
+    c = _make_client()
+    t = Task(client_id=c.id, title="Prepare AFS pack", due_date=date(2026, 6, 30))
+    db.session.add(t)
+    db.session.commit()
+
+    resp = client.get(f"/dashboard/tasks/{t.id}")
+    assert resp.status_code == 200
+    assert "Prepare AFS pack" in resp.data.decode()
+
+
+def test_task_detail_returns_404_for_missing_task(client):
+    """GET /dashboard/tasks/<id> for a non-existent id returns 404."""
+    resp = client.get("/dashboard/tasks/99999")
+    assert resp.status_code == 404

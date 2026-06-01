@@ -55,7 +55,7 @@
           <tr>
             <td>#{{ task.id }}</td>
             <td>{{ task.client.legal_name if task.client else "—" }}</td>
-            <td>{{ task.title }}</td>
+            <td><a href="{{ url_for('tasks.task_detail', task_id=task.id) }}">{{ task.title }}</a></td>
             <td>
               {{ task.due_date }}
               {% if is_overdue(task, today) %}

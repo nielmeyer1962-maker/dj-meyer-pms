@@ -63,3 +63,23 @@ def list_tasks():
         current_assignee=assignee_arg,
         current_view=view_arg,
     )
+
+
+@bp.get("/<int:task_id>")
+def task_detail(task_id: int):
+    # selectinload client + assignee to mirror obligation_detail and avoid a
+    # lazy second round-trip when the template reads the relationships.
+    task = db.get_or_404(
+        Task,
+        task_id,
+        options=[
+            selectinload(Task.client),
+            selectinload(Task.assignee),
+        ],
+    )
+    return render_template(
+        "tasks/detail.html",
+        task=task,
+        today=today_sast(),
+        is_overdue=is_overdue,
+    )
