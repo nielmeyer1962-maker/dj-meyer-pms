@@ -17,16 +17,9 @@ from app.services.obligations.transitions import (
     mark_submitted,
 )
 from app.utils.dates import today_sast
+from app.utils.staff import get_active_staff, UNASSIGNED_SENTINEL
 
 bp = Blueprint("dashboard", __name__, url_prefix="/dashboard")
-
-UNASSIGNED_SENTINEL = "__unassigned__"
-
-
-def _active_staff() -> list[Staff]:
-    return db.session.scalars(
-        db.select(Staff).where(Staff.active.is_(True)).order_by(Staff.code)
-    ).all()
 
 
 def _reassign_choices(active_staff: list[Staff]) -> list[tuple[str, str]]:
@@ -39,7 +32,7 @@ def _reassign_choices(active_staff: list[Staff]) -> list[tuple[str, str]]:
 @bp.get("/")
 def list_obligations():
     today = today_sast()
-    active_staff = _active_staff()
+    active_staff = get_active_staff()
 
     # --- Filter parsing — raw query-string per locked decision §9. ---
     status_arg = request.args.get("status", "").upper()
@@ -113,7 +106,7 @@ def obligation_detail(obligation_id: int):
             selectinload(ObligationInstance.assignee),
         ],
     )
-    active_staff = _active_staff()
+    active_staff = get_active_staff()
     reassign_form = ReassignForm(assignee_id=str(instance.assignee_id or ""))
     reassign_form.assignee_id.choices = _reassign_choices(active_staff)
     return render_template(
@@ -139,7 +132,7 @@ def update_obligation_notes(obligation_id: int):
     form = NotesForm()
     if not form.validate_on_submit():
         # Re-render so the user keeps their typed text + sees inline errors.
-        active_staff = _active_staff()
+        active_staff = get_active_staff()
         reassign_form = ReassignForm(assignee_id=str(instance.assignee_id or ""))
         reassign_form.assignee_id.choices = _reassign_choices(active_staff)
         return render_template(
