@@ -14,7 +14,6 @@ from sqlalchemy import (
     Integer,
     SmallInteger,
     String,
-    Text,
     event,
     func,
 )
@@ -60,15 +59,21 @@ class Client(db.Model):
     tax_ref: Mapped[str | None] = mapped_column(String(50))
     vat_number: Mapped[str | None] = mapped_column(String(50))
     paye_number: Mapped[str | None] = mapped_column(String(50))
-    # Primary contact details. Sourced from the QuickBooks export / firm records;
-    # all optional. No email shape check yet (matches the Staff.email decision).
-    # A separate Contact table for multiple contacts is deferred until needed.
+    # Primary contact details, structured to match the firm's contact export
+    # (Main/CC email, multiple phones, street address) for clean letter addressing.
+    # All optional. No email shape check yet (matches the Staff.email decision). A
+    # separate Contact table for multiple contacts per client is deferred.
     contact_person: Mapped[str | None] = mapped_column(String(200))
-    phone: Mapped[str | None] = mapped_column(String(50))
-    mobile: Mapped[str | None] = mapped_column(String(50))
     email: Mapped[str | None] = mapped_column(String(200))
-    physical_address: Mapped[str | None] = mapped_column(Text)
-    postal_address: Mapped[str | None] = mapped_column(Text)
+    cc_email: Mapped[str | None] = mapped_column(String(200))
+    phone: Mapped[str | None] = mapped_column(String(50))
+    work_phone: Mapped[str | None] = mapped_column(String(50))
+    mobile: Mapped[str | None] = mapped_column(String(50))
+    fax: Mapped[str | None] = mapped_column(String(50))
+    street1: Mapped[str | None] = mapped_column(String(200))
+    street2: Mapped[str | None] = mapped_column(String(200))
+    city: Mapped[str | None] = mapped_column(String(100))
+    postcode: Mapped[str | None] = mapped_column(String(20))
     year_end_month: Mapped[int | None] = mapped_column(SmallInteger)  # 1–12
     year_end_day: Mapped[int | None] = mapped_column(SmallInteger)  # 1–31
     # CIPC annual-return anniversary (incorporation month/day). Drives the CIPC

@@ -370,21 +370,31 @@ def test_contact_fields_persist(app):
             legal_name="Contactable Corp",
             entity_type=EntityType.PTY_LTD,
             contact_person="Kamal Singh",
-            phone="011 425 2691",
-            mobile="082 442 7977",
             email="info@example.co.za",
-            physical_address="6 Eleventh Avenue, Northmead, Benoni 1500",
-            postal_address="PO Box 131198, Northmead 1511",
+            cc_email="accounts@example.co.za",
+            phone="011 425 2691",
+            work_phone="011 425 2692",
+            mobile="082 442 7977",
+            fax="011 609 7836",
+            street1="6 Eleventh Avenue",
+            street2="Northmead",
+            city="Benoni",
+            postcode="1500",
         )
         db.session.add(c)
         db.session.commit()
         got = db.session.get(Client, c.id)
         assert got.contact_person == "Kamal Singh"
-        assert got.phone == "011 425 2691"
-        assert got.mobile == "082 442 7977"
         assert got.email == "info@example.co.za"
-        assert got.physical_address.startswith("6 Eleventh Avenue")
-        assert got.postal_address.startswith("PO Box 131198")
+        assert got.cc_email == "accounts@example.co.za"
+        assert got.phone == "011 425 2691"
+        assert got.work_phone == "011 425 2692"
+        assert got.mobile == "082 442 7977"
+        assert got.fax == "011 609 7836"
+        assert got.street1 == "6 Eleventh Avenue"
+        assert got.street2 == "Northmead"
+        assert got.city == "Benoni"
+        assert got.postcode == "1500"
 
 
 def test_contact_fields_default_none(app):
@@ -393,8 +403,13 @@ def test_contact_fields_default_none(app):
         db.session.add(c)
         db.session.commit()
         assert c.contact_person is None
-        assert c.phone is None
-        assert c.mobile is None
         assert c.email is None
-        assert c.physical_address is None
-        assert c.postal_address is None
+        assert c.cc_email is None
+        assert c.phone is None
+        assert c.work_phone is None
+        assert c.mobile is None
+        assert c.fax is None
+        assert c.street1 is None
+        assert c.street2 is None
+        assert c.city is None
+        assert c.postcode is None

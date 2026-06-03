@@ -85,9 +85,12 @@ the server. Complements Options 1/2.
   `Version`, `Status Category`, `Filing Date`, `Amount Due (R)`, `Source Status (verbatim)`.
   Clean and ready — see DATA_SOURCES.md.
 
-## New open questions (added to the SCHEMA_PLAN list)
+## Decisions (resolved 3 June 2026)
 
-6. Letter-writing access: **Phase 1 export now**, or jump straight to the **MCP connector**?
-7. Ticket B address: keep simple Text, or **structured** (`street1/2`, `city`, `postcode`)
-   + `cc_email` to support proper letter addressing?
-8. Will Dewalt produce the **clean contact export for all 8 staff** (not just Candice)?
+6. Letter-writing access — ✅ **agreed: phased hybrid** (Phase 1 sanitised export now,
+   Phase 2 read-only MCP connector next).
+7. Ticket B address — ✅ **agreed: structured** (`street1/2`, `city`, `postcode`) +
+   `cc_email`. **Built** (migration `9766be8a3a42`).
+8. Clean contact export for all 8 staff — ✅ in progress: `Client_Contact_Update_Template.xlsx`
+   produced (634 clients grouped by Rep, Candice's pre-filled) for Niel to circulate; staff
+   complete it and Niel returns it for import.

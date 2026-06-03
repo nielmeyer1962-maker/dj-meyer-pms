@@ -47,17 +47,17 @@ default once the engine hook lands.
 
 ---
 
-## Ticket B — Client contact fields  ✅ DONE *(commit pending)*
+## Ticket B — Client contact fields  ✅ DONE *(structured: street/city/postcode + cc_email)*
 
-**Why:** the QuickBooks export carries contact details the model can't hold.
+**Why:** the firm contact export carries contact details the model can't hold.
 
-**New columns on `clients`** (all nullable): `contact_person`, `phone`, `mobile`,
-`email`, `physical_address` (Text), `postal_address` (Text).
+**Columns on `clients`** (all nullable, structured to match the firm contact export):
+`contact_person`, `email`, `cc_email`, `phone`, `work_phone`, `mobile`, `fax`, `street1`,
+`street2`, `city`, `postcode`.
 
-**QB mapping:** `First Name`+`Last Name` → `contact_person`; `Main Phone` → `phone`;
-`Mobile` → `mobile`; `VAT Registration Number` → `vat_number` (existing).
-⚠️ The seen QB export has **no email / physical address** — columns land now, populate
-once the source is confirmed.
+**Source:** the *Customer Contact List (Dewald)* file (DATA_SOURCES.md §3) — Main/CC email,
+structured address, Work/Mobile phone, clean Rep codes. Staff complete the gaps via the
+circulated `Client_Contact_Update_Template.xlsx`.
 
 **Deferred:** a separate `Contact` table for multiple contacts per client — only if
 demand surfaces. No `@` shape check on email yet (matches the `Staff.email` decision).
