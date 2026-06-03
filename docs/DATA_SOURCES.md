@@ -39,6 +39,30 @@ Working/QA sheets (not imported): `Cover`, `Unmatched - Action Required` (71 row
   ~179 rows, 3 columns (no header): `#`, `Company`, `Reg Number`. A patch to allocations
   / reg numbers, not a standalone source.
 
+## 3. Contact source with emails (best contact file — use for Ticket B)
+
+**`DJ_Meyer_Customer_Contact_List Candice (Dewald).xlsx`** — sheet `Customer Contact List`,
+header on **row 1**, ~163 rows (Candice's clients only so far). The richest, cleanest
+contact source — prefer this over the QB export:
+`Status`, `Company`, `Bill To`, **`Main Email`**, **`CC Email`**, `Primary Contact First/Last
+Name`, `Main Phone`, `Work Phone`, `Mobile`, `Fax`, `Balance`, **`Street1`, `Street2`,
+`City`, `Postcode`**, `VAT Registration Number`, **`Rep`** (clean codes, e.g. `CANDI`).
+⚠️ Only Candice's clients exist in this format — need the same export for all 8 staff.
+
+## 4. SARS return-status files (feed Ticket D)
+
+- **`SARS_efiling Return_Statusit14.xlsx`** — company income tax (ITR14). Sheet
+  `All Returns` (~383): `Client Name`, `Income Tax Ref`, `Return Type`, `Year of
+  Assessment`, `Version`, `Status`, `Status Category`, `Amount Due (R)`, `Completion Date`,
+  `Source Status (verbatim)`. Sheet `Client Summary` (~185): per-client roll-up.
+- **`DJM_IT12_Return_Status filed in efiling.xlsx`** — individual income tax (ITR12). Sheet
+  `IT12 Returns` (~243): `Taxpayer Name`, `Title`, `Income Tax Ref`, `Return Type`,
+  `Year of Assessment`, `Version`, `Status Category`, `Filing Date`, `Amount Due (R)`,
+  `Source Status (verbatim)`. Sheet `Action List` (~105): items needing attention.
+
+These confirm Ticket D's shape. See [CLIENT_DATA_ACCESS.md](CLIENT_DATA_ACCESS.md) for the
+letter-writing access design (PMS as source of truth + Claude Teams access layer).
+
 ## Field → `Client` model mapping
 
 | Source column | `Client` field | Status |
@@ -74,8 +98,9 @@ Working/QA sheets (not imported): `Cover`, `Unmatched - Action Required` (71 row
   or wait for Dewalt's signed-off version. Do not import straight to production tables.
 - **`Rep` normalisation.** QB `Rep` values mix first names and codes (e.g. `Quinlyn`,
   `CHANT`). Build a `Rep → Staff.code` lookup; flag unmatched reps for a manual pass.
-- **Email/address gap.** The QB export lacks email + physical address. Confirm the source
-  for those before promising a contact merge.
+- **Email/address source found.** The QB export lacks email/address, but the
+  `Customer Contact List (Dewald)` file (§3) has Main/CC Email + structured address — use
+  that for the contact merge. It only covers Candice's clients so far.
 - **POPIA.** ID numbers and tax refs are sensitive. Keep them in the DB only; never in
   committed docs, portable Project knowledge, or chat.
 
