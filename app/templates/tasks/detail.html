@@ -45,4 +45,8 @@
   <dt class="col-sm-3">Notes</dt>
   <dd class="col-sm-9" style="white-space: pre-wrap;">{{ task.notes or "—" }}</dd>
 </dl>
+
+<div class="mt-3">
+  <a href="{{ url_for('tasks.task_edit', task_id=task.id) }}" class="btn btn-outline-secondary">Edit</a>
+</div>
 {% endblock %}

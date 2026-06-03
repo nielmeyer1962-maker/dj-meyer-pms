@@ -1,7 +1,10 @@
 {% extends "base.html" %}
 {% block title %}Tasks — DJ Meyer PMS{% endblock %}
 {% block content %}
-<h1 class="h3 mb-4">Tasks</h1>
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <h1 class="h3 mb-0">Tasks</h1>
+  <a href="{{ url_for('tasks.task_new') }}" class="btn btn-primary">+ New task</a>
+</div>
 
 <form method="get" class="row g-2 mb-4">
   <div class="col-md-3">
