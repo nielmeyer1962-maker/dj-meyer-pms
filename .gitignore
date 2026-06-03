@@ -26,6 +26,12 @@ htmlcov/
 # Local dev scripts
 seed.py
 
+# Client data — never commit (POPIA). Raw client spreadsheets/exports stay on Y:\.
+*.xlsx
+*.xls
+*.csv
+Excell files to be importes into PMS/
+
 # Editor
 .vscode/
 .idea/

@@ -20,15 +20,59 @@ If a new requirement seems to drift toward any of the above, stop and confirm wi
 
 **Practice areas:** SA tax compliance and dispute resolution, B-BBEE compliance, corporate and estate law documentation, business valuations, secretarial work.
 
-**Staff:**
+### People and roles
 
-- Candice, Jeanne Marie, Niel, Quinlyn, Caroline, Stacey — Accounting and Tax
-- Tsego — Secretarial (handles all CIPC annual returns for Pty Ltd and CC entities)
+| Code | Name | Email | Dept / role | Notes |
+|------|------|-------|-------------|-------|
+| NIEL | Niel Meyer (Daniel Jacobus Meyer) | niel@djmeyer.co.za | Tax & Accounting — **Principal / owner** | Involved in everything except secretarial. SAIPA No. 03393. |
+| JEANNE | Jeanne-Marie Meyer | jeanne-marie@djmeyer.co.za | Tax & Accounting — **Assistant Principal** | Niel's daughter; successor / future owner. SAIPA No. 62098. |
+| CANDI | Candice van der Merwe | candice@djmeyer.co.za *(TBC)* | Tax & Accounting | |
+| STACEY | Stacey Roux | stacy@djmeyer.co.za | Tax & Accounting (tax) | Married to Dewalt. |
+| QUINLYN | Quinlyn Breedske | quinlyn@djmeyer.co.za | Tax & Accounting | |
+| CAROLINE | Caroline Lombard | caroline@djmeyer.co.za | Tax & Accounting | |
+| DEWALT | Dewalt Roux | dewalt@djmeyer.co.za *(TBC)* | Tax & Accounting (back office) | Stacey's husband. Supports Candice & Stacey; converts source data to Excel for import into **CaseWare** (where final AFS are prepared). Not client-allocated. |
+| TSEGO | Tsego Mogale | tsego@djmeyer.co.za | Secretarial (runs the dept) | CIPC compliance, Beneficial Ownership, **Workmen's Compensation (COIDA)**, and SARS registrations. |
 
-**Assignment rules to encode:**
+`StaffRole` enum mapping: Tax & Accounting → `TAX`, Secretarial → `SECRETARIAL`.
+`BOTH` is reserved for anyone working across both departments — nobody currently.
+The firm is **SAIPA-registered, Practice No. 03393**, at 6 Eleventh Avenue, Northmead, Benoni 1500.
 
-- Every Pty Ltd and CC client is also assigned to Tsego for the CIPC annual return obligation, regardless of who else is on the engagement.
-- Tax obligations follow the staff member assigned to that client's tax engagement.
+### How the work is divided
+
+**Tax & Accounting team** (Niel, Jeanne Marie, Candice, Stacey, Quinlyn, Caroline):
+
+- Each client is **allocated to one** tax/accounting staff member who owns all of that
+  client's work.
+- Recurring returns: **VAT201** (monthly or bi-monthly), **EMP201** (monthly),
+  **EMP501** (bi-annual).
+- Annual: prepare **Annual Financial Statements** (finalised in **CaseWare**), submit the
+  **ITR14** (company income tax), and submit **ITR12** (individual income tax) for the
+  company's members/owners.
+- Handle all **SARS queries and requests** for their allocated clients.
+- **Back office (Dewalt Roux)** supports Candice & Stacey — converts source data to Excel
+  for import into **CaseWare**, where the final Annual Financial Statements are prepared.
+  Not allocated clients of his own.
+
+**Secretarial (Tsego):**
+
+- **CIPC** compliance — annual returns for every Pty Ltd and CC, plus **Beneficial
+  Ownership** filings.
+- **SARS registrations** — registering new VAT numbers, Income Tax numbers, and
+  Employees' Tax (PAYE) numbers.
+
+### Assignment rules to encode
+
+- Every Pty Ltd and CC client is also assigned to **Tsego** for the CIPC annual return
+  (and Beneficial Ownership), regardless of who else is on the engagement.
+- All other obligations follow the **single tax/accounting staff member** the client is
+  allocated to.
+
+### Known future requirement — SARS correspondence inbox (not yet built, do not build unprompted)
+
+SARS queries/requests arrive two ways today: as **messages on Niel's cell phone**, and in
+**eFiling under "SARS Correspondence."** A future phase must let staff **import that
+correspondence into dj-meyer-pms** and attach it to the relevant client/obligation so
+nothing is missed. Captured here so it isn't lost — build only as an approved ticket.
 
 ## Domain vocabulary (SA-specific)
 
@@ -50,25 +94,129 @@ Entity types in scope: Individual, Sole Proprietor, Pty Ltd, CC, Trust, Partners
 
 ## Stack
 
-**Not yet chosen.** On first session, recommend a stack to Daniel based on:
+Chosen and in use (boring, well-supported, maintainable by one person + AI):
 
-- Daniel has prior Flask / Python experience and built a small accounting web app before.
-- Single firm, around ten staff, low concurrent users.
-- Will likely run on a small VPS or local server in South Africa.
-- Must be maintainable by one person (Daniel) with AI assistance.
-- Will later integrate with the Zoho Projects API, Gmail / SMTP, and n8n webhooks.
+- **Language:** Python 3.12+ (note: the local `.venv` currently runs 3.13 — see "Known issues").
+- **Web:** Flask 3 (app-factory pattern, blueprints).
+- **ORM:** SQLAlchemy 2.0 with typed `Mapped[...]` models; Flask-SQLAlchemy.
+- **Migrations:** Flask-Migrate / Alembic. No schema change without a migration.
+- **Forms / CSRF:** Flask-WTF + WTForms. CSRF protection is global (`csrf.init_app`).
+- **Database:** PostgreSQL (psycopg2-binary). Local dev DB runs on `localhost:5433`.
+- **Templating:** Jinja2 server-rendered HTML; `app/templates/base.html` is the shell.
+- **SA calendar logic:** `holidays` + `tzdata` for business-day / due-date maths.
+- **Mail (future):** Flask-Mail (Gmail SMTP) — configured but not yet wired into features.
+- **Tooling:** `ruff` (lint + format, line-length 100, target py312), `pytest` (+ pytest-flask).
 
-Default to boring, well-supported choices. Justify the recommendation in five to ten lines and wait for sign-off before scaffolding anything.
+Planned future integrations (not built yet): Zoho Projects API, Gmail / SMTP notifications, n8n webhooks.
 
-## Coding conventions (apply once the stack is chosen)
+## Architecture
+
+Layered, with business logic kept out of the routes:
+
+```
+run.py                  Entry point: load_dotenv() → create_app() → app.run(debug=True)
+seed.py                 Dev helper: inserts 3 starter Staff rows.
+app/
+  __init__.py           create_app() factory — registers extensions + blueprints.
+  config.py             Config class, reads env vars (SECRET_KEY, DATABASE_URL, MAIL_*).
+  extensions.py         Singletons: db (SQLAlchemy), migrate, csrf.
+  models/               Data layer — typed SQLAlchemy models + invariants.
+    client.py             Client, EntityType, VatCategory, VatSubmissionMethod.
+    obligation.py         ObligationInstance, ObligationType, ObligationStatus.
+    task.py               Task, TaskStatus (ad-hoc client tasks).
+    staff.py              Staff, StaffRole (TAX / SECRETARIAL / BOTH).
+  services/             Business logic — NO Flask, pure functions, fully unit-tested.
+    obligations/          predicates (overdue), transitions (state graph),
+                          vat201 (period/due-date generation), regenerate.
+    tasks/                predicates.
+  <blueprint>/          Presentation layer — one folder per feature area:
+    clients/              routes + forms     → URL prefix /clients
+    dashboard/            routes + forms     → URL prefix /dashboard  (obligations)
+    tasks/                routes + forms     → URL prefix /dashboard/tasks
+  templates/            Jinja2 templates, grouped per blueprint.
+  utils/                dates (today_sast), business_days, staff helpers.
+migrations/             Alembic migration history (6 revisions; latest = task table).
+tests/                  pytest suite mirroring the app tree (170 tests, all passing).
+```
+
+**Key design rules already established in the code (follow them):**
+
+- **Status is a stored enum; "OVERDUE" is derived at read time** (status PENDING/OPEN AND
+  due date < today in `Africa/Johannesburg`) — never a stored value.
+- **State transitions live only in the service layer** (`services/obligations/transitions.py`),
+  never in models or routes. Routes call the service, catch `ValueError`, flash, redirect.
+- **Cross-field invariants** (VAT pairing, year-end pairing) are enforced via SQLAlchemy
+  `@validates` + `before_insert`/`before_update` events on the model.
+- **Clients/Staff are soft-deleted** (`active=False`), not hard-deleted. FKs use
+  `ON DELETE RESTRICT` (obligations/tasks → client) and `SET NULL` (→ staff assignee).
+- **Avoid N+1:** `selectinload` the `client` and `assignee` relationships on list views.
+
+## How to run
+
+All commands from the project root, using the project venv (`.venv\Scripts\`).
+
+```powershell
+# 1. Activate the virtual environment (Windows PowerShell)
+.\.venv\Scripts\Activate.ps1
+
+# 2. Install / update dependencies (first run, or after a pull)
+pip install -r requirements.txt -r requirements-dev.txt
+
+# 3. Configure environment (first run only)
+copy .env.example .env
+#    then edit .env: set DATABASE_URL (Postgres on :5433), SECRET_KEY, MAIL_* if needed
+
+# 4. Apply database migrations
+flask --app run db upgrade
+
+# 5. (optional) Seed starter staff rows
+python seed.py
+
+# 6. Run the dev server  → http://localhost:5000
+python run.py
+```
+
+Quality gates (run before every commit):
+
+```powershell
+ruff check .        # lint  — must be clean
+ruff format .       # auto-format
+pytest -q           # full suite — must be green
+```
+
+Production (per README): `gunicorn -w 4 "run:app"` behind nginx, `DEBUG=False`, strong `SECRET_KEY`.
+
+## Current state (update as it changes)
+
+- Branch `main`, tracking `origin/main` (GitHub: nielmeyer1962-maker/dj-meyer-pms).
+- Built so far: Client model + CRUD, Staff model, VAT201 obligation generation,
+  dashboard with filters + per-row actions (submit/paid/exempt/reassign/notes),
+  and the start of ad-hoc **Tasks** (Ticket 3g).
+- **In flight:** Ticket 3g Chunk 2 — task form / detail page. Working tree has uncommitted
+  changes in `app/tasks/routes.py`, the task templates, and `tests/tasks/test_routes.py`,
+  plus untracked `app/templates/tasks/form.html`.
+
+## Known issues / cleanup backlog
+
+- **Ruff is currently red** (2 errors) in the in-flight `tests/tasks/test_routes.py:18`
+  (`UP037` quoted annotation `-> "Staff"` + resulting `F821`). Resolve before committing 3g.
+- **Python version drift:** `.venv` runs 3.13 but `pyproject.toml` / ruff target 3.12.
+  Either align the venv to 3.12 or bump the target deliberately.
+- **`gunicorn` is referenced in README deploy but not in `requirements.txt`** — add it.
+- **`config.py` default `DATABASE_URL`** (`postgresql://localhost/djmeyer_pms`, no port)
+  is stale vs. the real `:5433` DB. Harmless while `.env` is present; fix the default.
+
+## Coding conventions
 
 - Prefer clarity over cleverness. Daniel will be reading this code in six months.
-- Type hints everywhere if Python is chosen.
-- One concept per file. Small modules.
-- Store all timestamps as UTC, display in `Africa/Johannesburg`. Always be explicit about which.
+- Type hints everywhere (Python). Typed `Mapped[...]` columns on all models.
+- One concept per file. Small modules. Keep business logic in `services/`, not routes.
+- Store all timestamps as UTC (`DateTime(timezone=True)`), display in `Africa/Johannesburg`.
+  Always be explicit about which.
 - All money values as integers in cents, or `Decimal`. Never floats.
 - Database migrations are first-class. No schema changes without a migration.
-- Tests are required for any logic that calculates a deadline or assigns work. Pure UI may skip tests for now.
+- Tests are required for any logic that calculates a deadline or assigns work. Pure UI may
+  skip tests for now. The test tree mirrors the app tree.
 - Commit early and often, with messages that describe *why*, not *what*.
 
 ## Working agreement
