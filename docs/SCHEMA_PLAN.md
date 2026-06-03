@@ -1,7 +1,7 @@
 # Schema Plan — preparing the model for the real client data
 
-Design proposal for the schema the import needs. **Ticket A is built (commit
-`5f6b0d8`); Tickets B–D remain design only.** Source mapping and caveats live in
+Design proposal for the schema the import needs. **Tickets A & B are built;
+Tickets C–D remain design only.** Source mapping and caveats live in
 [DATA_SOURCES.md](DATA_SOURCES.md).
 Niel reviews and approves each ticket before it is implemented (per the working
 agreement in `CLAUDE.md`).
@@ -47,7 +47,7 @@ default once the engine hook lands.
 
 ---
 
-## Ticket B — Client contact fields  *(independent)*
+## Ticket B — Client contact fields  ✅ DONE *(commit pending)*
 
 **Why:** the QuickBooks export carries contact details the model can't hold.
 
@@ -112,7 +112,7 @@ sheet isolates Estimates from staff production stats).
 ## Sequencing
 
 1. **A** — allocation + CIPC → unblocks company import + obligation assignment. ✅ done
-2. **B** — contact fields → unblocks the QB contact merge.
+2. **B** — contact fields → unblocks the QB contact merge. ✅ done
 3. **C** — beneficial owners → unblocks the group model / Aerocom test.
 4. **D** — IT12 tracking → after the status-vocabulary decisions.
 
