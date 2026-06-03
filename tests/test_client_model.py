@@ -2,6 +2,7 @@ import pytest
 
 from app.extensions import db
 from app.models.client import Client, EntityType, VatCategory, VatSubmissionMethod
+from app.models.staff import Staff, StaffRole
 
 # --- Happy paths ---
 
@@ -253,3 +254,108 @@ def test_vat_category_invalid_string_raises(app):
                 has_vat=True,
                 vat_category="Z",
             )
+
+
+# --- CIPC anniversary: happy path + month range ---
+
+
+def test_cipc_anniversary_valid(app):
+    with app.app_context():
+        c = Client(
+            legal_name="Anniversary Corp",
+            entity_type=EntityType.PTY_LTD,
+            cipc_anniversary_month=7,
+            cipc_anniversary_day=15,
+        )
+        db.session.add(c)
+        db.session.commit()
+        assert c.cipc_anniversary_month == 7
+        assert c.cipc_anniversary_day == 15
+
+
+def test_cipc_anniversary_month_zero_raises(app):
+    with app.app_context():
+        with pytest.raises(ValueError, match="cipc_anniversary_month"):
+            Client(legal_name="Corp", entity_type=EntityType.PTY_LTD, cipc_anniversary_month=0)
+
+
+def test_cipc_anniversary_month_thirteen_raises(app):
+    with app.app_context():
+        with pytest.raises(ValueError, match="cipc_anniversary_month"):
+            Client(legal_name="Corp", entity_type=EntityType.PTY_LTD, cipc_anniversary_month=13)
+
+
+# --- CIPC anniversary: day valid for month ---
+
+
+def test_cipc_feb_30_raises(app):
+    with app.app_context():
+        c = Client(legal_name="Corp", entity_type=EntityType.PTY_LTD, cipc_anniversary_month=2)
+        with pytest.raises(ValueError):
+            c.cipc_anniversary_day = 30
+
+
+def test_cipc_apr_31_raises(app):
+    with app.app_context():
+        c = Client(legal_name="Corp", entity_type=EntityType.PTY_LTD, cipc_anniversary_month=4)
+        with pytest.raises(ValueError):
+            c.cipc_anniversary_day = 31
+
+
+# --- CIPC anniversary: must be paired ---
+
+
+def test_cipc_day_without_month_raises(app):
+    with app.app_context():
+        c = Client(legal_name="Corp", entity_type=EntityType.PTY_LTD)
+        with pytest.raises(ValueError):
+            c.cipc_anniversary_day = 15
+
+
+def test_cipc_month_without_day_raises_on_flush(app):
+    with app.app_context():
+        c = Client(legal_name="Corp", entity_type=EntityType.PTY_LTD, cipc_anniversary_month=7)
+        db.session.add(c)
+        with pytest.raises(ValueError, match="cipc_anniversary"):
+            db.session.flush()
+        db.session.rollback()
+
+
+# --- Allocation: FK + ON DELETE SET NULL ---
+
+
+def test_allocated_staff_assignment_valid(app):
+    with app.app_context():
+        s = Staff(code="NIEL", full_name="Niel Meyer", role=StaffRole.TAX)
+        db.session.add(s)
+        db.session.commit()
+        c = Client(
+            legal_name="Allocated Corp",
+            entity_type=EntityType.PTY_LTD,
+            allocated_staff_id=s.id,
+        )
+        db.session.add(c)
+        db.session.commit()
+        assert c.allocated_staff_id == s.id
+        assert c.allocated_staff is s
+
+
+def test_allocated_staff_set_null_on_staff_delete(app):
+    """Hard-deleting a staff member reverts their clients to unallocated rather
+    than blocking the delete (ON DELETE SET NULL)."""
+    with app.app_context():
+        s = Staff(code="CAND", full_name="Candice", role=StaffRole.TAX)
+        db.session.add(s)
+        db.session.commit()
+        c = Client(
+            legal_name="Reassign Corp",
+            entity_type=EntityType.PTY_LTD,
+            allocated_staff_id=s.id,
+        )
+        db.session.add(c)
+        db.session.commit()
+
+        db.session.delete(s)
+        db.session.commit()
+        db.session.refresh(c)
+        assert c.allocated_staff_id is None

@@ -3,11 +3,26 @@ from __future__ import annotations
 import calendar
 import enum
 from datetime import date, datetime
+from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, Date, DateTime, Enum, Integer, SmallInteger, String, event, func
-from sqlalchemy.orm import Mapped, mapped_column, validates
+from sqlalchemy import (
+    Boolean,
+    Date,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Integer,
+    SmallInteger,
+    String,
+    event,
+    func,
+)
+from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
 from app.extensions import db
+
+if TYPE_CHECKING:
+    from app.models.staff import Staff
 
 
 class EntityType(enum.Enum):
@@ -46,6 +61,10 @@ class Client(db.Model):
     paye_number: Mapped[str | None] = mapped_column(String(50))
     year_end_month: Mapped[int | None] = mapped_column(SmallInteger)  # 1–12
     year_end_day: Mapped[int | None] = mapped_column(SmallInteger)  # 1–31
+    # CIPC annual-return anniversary (incorporation month/day). Drives the CIPC
+    # obligation; only meaningful for PTY_LTD / CC. Month and day travel together.
+    cipc_anniversary_month: Mapped[int | None] = mapped_column(SmallInteger)  # 1–12
+    cipc_anniversary_day: Mapped[int | None] = mapped_column(SmallInteger)  # 1–31
     bbee_applicable: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     client_since: Mapped[date | None] = mapped_column(Date)
@@ -53,6 +72,18 @@ class Client(db.Model):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+    # The tax/accounting staff member who owns this client's work ("Staff Member"
+    # in Tsego's roster / "Rep" in QuickBooks). Nullable so an unallocated client
+    # is a first-class state. ON DELETE SET NULL mirrors obligations/tasks: staff
+    # offboarding reverts their clients to unallocated rather than blocking delete.
+    allocated_staff_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("staff.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    allocated_staff: Mapped[Staff | None] = relationship("Staff", lazy="select")
 
     # Tax registrations held by this client
     has_income_tax: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
@@ -88,6 +119,25 @@ class Client(db.Model):
         if month is None:
             raise ValueError("year_end_day cannot be set without year_end_month")
         # Non-leap year so Feb is capped at 28 — year-ends of Feb 29 are not meaningful
+        _, max_day = calendar.monthrange(2001, month)
+        if not (1 <= value <= max_day):
+            raise ValueError(f"day {value} is invalid for month {month} (max {max_day})")
+        return value
+
+    @validates("cipc_anniversary_month")
+    def _validate_cipc_anniversary_month(self, key: str, value: int | None) -> int | None:
+        if value is not None and not (1 <= value <= 12):
+            raise ValueError(f"cipc_anniversary_month must be 1–12, got {value}")
+        return value
+
+    @validates("cipc_anniversary_day")
+    def _validate_cipc_anniversary_day(self, key: str, value: int | None) -> int | None:
+        if value is None:
+            return value
+        month = self.cipc_anniversary_month
+        if month is None:
+            raise ValueError("cipc_anniversary_day cannot be set without cipc_anniversary_month")
+        # Non-leap year so Feb caps at 28 — Feb 29 anniversaries are not meaningful
         _, max_day = calendar.monthrange(2001, month)
         if not (1 <= value <= max_day):
             raise ValueError(f"day {value} is invalid for month {month} (max {max_day})")
@@ -156,3 +206,10 @@ def _check_pairing_invariants(mapper, connection, target: Client) -> None:
     # Independent of has_vat: if one VAT field is set, the other must also be set.
     if (target.vat_category is None) != (target.vat_submission_method is None):
         raise ValueError("vat_category and vat_submission_method must both be set or both be None")
+
+    # -------------------- (iv) CIPC anniversary pairing --------------------
+    # month and day travel together — either both set or both None.
+    if (target.cipc_anniversary_month is None) != (target.cipc_anniversary_day is None):
+        raise ValueError(
+            "cipc_anniversary_month and cipc_anniversary_day must both be set or both be None"
+        )
