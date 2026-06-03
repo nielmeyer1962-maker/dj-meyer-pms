@@ -359,3 +359,42 @@ def test_allocated_staff_set_null_on_staff_delete(app):
         db.session.commit()
         db.session.refresh(c)
         assert c.allocated_staff_id is None
+
+
+# --- Contact details ---
+
+
+def test_contact_fields_persist(app):
+    with app.app_context():
+        c = Client(
+            legal_name="Contactable Corp",
+            entity_type=EntityType.PTY_LTD,
+            contact_person="Kamal Singh",
+            phone="011 425 2691",
+            mobile="082 442 7977",
+            email="info@example.co.za",
+            physical_address="6 Eleventh Avenue, Northmead, Benoni 1500",
+            postal_address="PO Box 131198, Northmead 1511",
+        )
+        db.session.add(c)
+        db.session.commit()
+        got = db.session.get(Client, c.id)
+        assert got.contact_person == "Kamal Singh"
+        assert got.phone == "011 425 2691"
+        assert got.mobile == "082 442 7977"
+        assert got.email == "info@example.co.za"
+        assert got.physical_address.startswith("6 Eleventh Avenue")
+        assert got.postal_address.startswith("PO Box 131198")
+
+
+def test_contact_fields_default_none(app):
+    with app.app_context():
+        c = Client(legal_name="Bare Corp", entity_type=EntityType.PTY_LTD)
+        db.session.add(c)
+        db.session.commit()
+        assert c.contact_person is None
+        assert c.phone is None
+        assert c.mobile is None
+        assert c.email is None
+        assert c.physical_address is None
+        assert c.postal_address is None
