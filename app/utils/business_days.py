@@ -33,6 +33,34 @@ def last_business_day_of_month(year: int, month: int) -> date:
     return shift_to_prior_business_day(date(year, month, last_day))
 
 
+def add_business_days(start: date, n: int) -> date:
+    """Return the date n business days strictly AFTER start.
+
+    The start date itself is never counted, so add_business_days(Friday, 1) is the
+    following Monday. Weekends and SA public holidays are skipped. Used by the CIPC
+    Annual Return company deadline (30 business days after the incorporation
+    anniversary). Counterpart to shift_to_prior_business_day, which rolls backward.
+
+    n must be >= 1. Bounded defensively: 30 business days never spans more than ~50
+    calendar days even across a holiday-dense stretch, so the cap signals a bug or a
+    holiday-data problem rather than ever tripping in normal use.
+    """
+    if n < 1:
+        raise ValueError(f"n must be >= 1, got {n}")
+    d = start
+    added = 0
+    for _ in range(n * 2 + 30):
+        d += timedelta(days=1)
+        if is_business_day(d):
+            added += 1
+            if added == n:
+                return d
+    raise RuntimeError(
+        f"add_business_days exceeded its iteration bound adding {n} business days to "
+        f"{start.isoformat()} (now at {d.isoformat()}); check holiday data."
+    )
+
+
 def shift_to_prior_business_day(d: date) -> date:
     """Walk backwards day-by-day until d is a business day.
 

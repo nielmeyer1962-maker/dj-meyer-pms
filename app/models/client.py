@@ -29,6 +29,7 @@ class EntityType(enum.Enum):
     INDIVIDUAL = "Individual"
     SOLE_PROP = "Sole Proprietor"
     PTY_LTD = "Pty Ltd"
+    INC = "Inc"
     CC = "CC"
     TRUST = "Trust"
     PARTNERSHIP = "Partnership"
