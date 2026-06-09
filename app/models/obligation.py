@@ -27,9 +27,24 @@ if TYPE_CHECKING:
 class ObligationType(enum.Enum):
     VAT201 = "VAT201"
 
+    @property
+    def has_payment_leg(self) -> bool:
+        """True for obligations that are filed *and* paid (a payment leg), so "done"
+        means PAID, not merely SUBMITTED. VAT201, EMP201 and IRP6 carry a payment leg;
+        everything else (e.g. EMP501, ITR14, CIPC annual return) is file-only. EMP201
+        and IRP6 are not yet enum members — the full map is encoded now so is_done is
+        correct the moment they are added."""
+        return self.value in _PAYMENT_LEG_TYPES
+
+
+# Obligation types that have a payment leg (file + pay). Keyed by enum *value* so the
+# map already covers EMP201/IRP6 before those members are added to ObligationType.
+_PAYMENT_LEG_TYPES = frozenset({"VAT201", "EMP201", "IRP6"})
+
 
 class ObligationStatus(enum.Enum):
     PENDING = "PENDING"
+    IN_PROGRESS = "IN_PROGRESS"
     SUBMITTED = "SUBMITTED"
     PAID = "PAID"
     EXEMPT = "EXEMPT"
@@ -54,8 +69,9 @@ class ObligationInstance(db.Model):
     # obligations (e.g. provisional tax) with distinct dates fit without schema change.
     submission_due_date: Mapped[date] = mapped_column(Date, nullable=False)
     payment_due_date: Mapped[date] = mapped_column(Date, nullable=False)
-    # OVERDUE is derived at read time (status == PENDING AND submission_due_date <
-    # today_in_Africa_Johannesburg) — not stored. State graph is enforced only by
+    # OVERDUE is derived at read time (status in {PENDING, IN_PROGRESS} AND
+    # submission_due_date < today_in_Africa_Johannesburg) — not stored. See
+    # services/obligations/predicates.is_overdue. State graph is enforced only by
     # the Ticket 3b service layer, never here.
     status: Mapped[ObligationStatus] = mapped_column(
         Enum(ObligationStatus),
@@ -109,6 +125,20 @@ class ObligationInstance(db.Model):
             "submission_due_date",
         ),
     )
+
+    @property
+    def is_done(self) -> bool:
+        """Whether this obligation is finished, accounting for the payment leg.
+
+        EXEMPT is always done. For obligations with a payment leg (VAT201/EMP201/IRP6)
+        "done" means PAID — a SUBMITTED-but-unpaid return is not finished. File-only
+        obligations are done once SUBMITTED. "Done"/"completed" is derived here, never
+        stored (see CLAUDE.md status rules)."""
+        if self.status is ObligationStatus.EXEMPT:
+            return True
+        if self.obligation_type.has_payment_leg:
+            return self.status is ObligationStatus.PAID
+        return self.status is ObligationStatus.SUBMITTED
 
     def __repr__(self) -> str:
         return (

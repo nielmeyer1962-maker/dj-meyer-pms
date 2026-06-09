@@ -52,6 +52,10 @@ def _make_instance(
         (ObligationStatus.PENDING, YESTERDAY, True),
         (ObligationStatus.PENDING, TODAY, False),  # strict <, due today is not overdue
         (ObligationStatus.PENDING, TOMORROW, False),
+        # IN_PROGRESS is an open status: started work can still be late.
+        (ObligationStatus.IN_PROGRESS, YESTERDAY, True),
+        (ObligationStatus.IN_PROGRESS, TODAY, False),
+        (ObligationStatus.IN_PROGRESS, TOMORROW, False),
         (ObligationStatus.SUBMITTED, YESTERDAY, False),
         (ObligationStatus.PAID, YESTERDAY, False),
         (ObligationStatus.EXEMPT, YESTERDAY, False),
@@ -67,10 +71,11 @@ def test_is_overdue_matrix(app, status, due, expected):
 # --- overdue_filter (SQL eval) ---
 
 
-def test_overdue_filter_returns_only_pending_past(app):
+def test_overdue_filter_matches_open_past_statuses(app):
     """SQL predicate must match Python predicate semantically — a divergence between
     them would be a silent dashboard bug. Seeds one row per (status x past/today/future)
-    combination relevant to the predicate and asserts exactly the PENDING+past row matches."""
+    combination relevant to the predicate and asserts exactly the open (PENDING /
+    IN_PROGRESS) + past rows match."""
     with app.app_context():
         c = _make_client()
 
@@ -79,8 +84,12 @@ def test_overdue_filter_returns_only_pending_past(app):
         pending_past = _make_instance(
             c.id, ObligationStatus.PENDING, YESTERDAY, period_end=date(2026, 1, 31)
         )
+        in_progress_past = _make_instance(
+            c.id, ObligationStatus.IN_PROGRESS, YESTERDAY, period_end=date(2026, 7, 31)
+        )
         _make_instance(c.id, ObligationStatus.PENDING, TODAY, period_end=date(2026, 2, 28))
         _make_instance(c.id, ObligationStatus.PENDING, TOMORROW, period_end=date(2026, 3, 31))
+        _make_instance(c.id, ObligationStatus.IN_PROGRESS, TOMORROW, period_end=date(2026, 8, 31))
         _make_instance(c.id, ObligationStatus.SUBMITTED, YESTERDAY, period_end=date(2026, 4, 30))
         _make_instance(c.id, ObligationStatus.PAID, YESTERDAY, period_end=date(2026, 5, 31))
         _make_instance(c.id, ObligationStatus.EXEMPT, YESTERDAY, period_end=date(2026, 6, 30))
@@ -89,5 +98,4 @@ def test_overdue_filter_returns_only_pending_past(app):
             db.select(ObligationInstance).where(overdue_filter(TODAY))
         ).all()
 
-        assert len(results) == 1
-        assert results[0].id == pending_past.id
+        assert {r.id for r in results} == {pending_past.id, in_progress_past.id}
