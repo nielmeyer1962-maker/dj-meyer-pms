@@ -22,10 +22,9 @@ class CIPCARFee(db.Model):
     turnover are stored as Decimal (Numeric) in RAND — turnover compares against the
     instance's annual_turnover converted to rand.
 
-    fee_late is nullable and intentionally left NULL on seed: Tsego's late-filing figures
-    are not yet supplied, and whether a late filing is (on-time fee + penalty) or a flat
-    late total — and whether it is fixed per band or accrues daily — is still to be
-    confirmed (see the migration note).
+    fee_late is the on-time fee plus a fixed late-filing penalty (CIPC_AR_LATE_PENALTY),
+    flat across all turnover bands and both entity classes (decision: Niel, 2026-06-09).
+    The penalty stays recoverable for billing as fee_late - fee_on_time.
     """
 
     __tablename__ = "cipc_ar_fees"
@@ -39,7 +38,8 @@ class CIPCARFee(db.Model):
     turnover_upper: Mapped[Decimal | None] = mapped_column(Numeric(14, 2), nullable=True)
     # On-time AR fee for the band, in rand.
     fee_on_time: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
-    # Late-filing fee, in rand. Nullable; left NULL until confirmed.
+    # Late-filing fee, in rand = fee_on_time + CIPC_AR_LATE_PENALTY. Column stays nullable
+    # (the table predates the late figures); seeded non-NULL since 2026-06-09.
     fee_late: Mapped[Decimal | None] = mapped_column(Numeric(14, 2), nullable=True)
 
     __table_args__ = (
@@ -58,42 +58,43 @@ class CIPCARFee(db.Model):
         )
 
 
+# Fixed late-filing penalty, in rand (matching the fee columns). A late CIPC AR is the
+# on-time fee plus this flat amount — the same for every turnover band and both entity
+# classes (company + cc). Fixed per year, not daily. See CIPC_AR_FEE_SEED below.
+CIPC_AR_LATE_PENALTY = Decimal("150")
+
 # Canonical seed for the reference table — the single source of truth, imported by both
 # the seeding migration and the test fixtures so they cannot drift. Bands are half-open
 # [turnover_lower, turnover_upper); amounts in rand.
 #   On-time fees: confirmed by Tsego, 2026-06-09, CIPC fee schedule.
-#   fee_late: intentionally None — Tsego's late-filing figures are not yet supplied, and
-#     whether a late filing is (on-time fee + penalty) or a flat total, and fixed-per-band
-#     vs daily-accrual, is unconfirmed. A daily accrual would not fit this single column.
-CIPC_AR_FEE_SEED: list[dict] = [
+#   fee_late derives from each band as fee_on_time + CIPC_AR_LATE_PENALTY:
+#   late = on-time + R150 fixed penalty; accepted by Niel 2026-06-09;
+#   CIPC fees subject to annual adjustment — re-verify on change.
+_CIPC_AR_FEE_BANDS: list[dict] = [
     # company (Pty Ltd / INC / NPC)
     {
         "entity_class": ENTITY_CLASS_COMPANY,
         "turnover_lower": 0,
         "turnover_upper": 1_000_000,
         "fee_on_time": 100,
-        "fee_late": None,
     },
     {
         "entity_class": ENTITY_CLASS_COMPANY,
         "turnover_lower": 1_000_000,
         "turnover_upper": 10_000_000,
         "fee_on_time": 450,
-        "fee_late": None,
     },
     {
         "entity_class": ENTITY_CLASS_COMPANY,
         "turnover_lower": 10_000_000,
         "turnover_upper": 25_000_000,
         "fee_on_time": 2000,
-        "fee_late": None,
     },
     {
         "entity_class": ENTITY_CLASS_COMPANY,
         "turnover_lower": 25_000_000,
         "turnover_upper": None,
         "fee_on_time": 3000,
-        "fee_late": None,
     },
     # close corporation
     {
@@ -101,13 +102,15 @@ CIPC_AR_FEE_SEED: list[dict] = [
         "turnover_lower": 0,
         "turnover_upper": 50_000_000,
         "fee_on_time": 100,
-        "fee_late": None,
     },
     {
         "entity_class": ENTITY_CLASS_CC,
         "turnover_lower": 50_000_000,
         "turnover_upper": None,
         "fee_on_time": 4000,
-        "fee_late": None,
     },
+]
+
+CIPC_AR_FEE_SEED: list[dict] = [
+    {**band, "fee_late": band["fee_on_time"] + CIPC_AR_LATE_PENALTY} for band in _CIPC_AR_FEE_BANDS
 ]
