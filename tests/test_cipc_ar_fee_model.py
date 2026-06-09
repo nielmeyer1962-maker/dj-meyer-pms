@@ -6,6 +6,7 @@ from sqlalchemy.exc import IntegrityError
 from app.extensions import db
 from app.models.cipc_ar_fee import (
     CIPC_AR_FEE_SEED,
+    CIPC_AR_LATE_PENALTY,
     ENTITY_CLASS_CC,
     ENTITY_CLASS_COMPANY,
     CIPCARFee,
@@ -26,11 +27,14 @@ def test_seed_inserts_expected_bands(app):
         assert sum(1 for r in rows if r.entity_class == ENTITY_CLASS_CC) == 2
 
 
-def test_seed_leaves_all_fee_late_null(app):
-    """fee_late is intentionally unset on seed pending Tsego's confirmed figures."""
+def test_seed_late_is_on_time_plus_fixed_penalty(app):
+    """fee_late = fee_on_time + R150, flat across every band (Niel, 2026-06-09)."""
     with app.app_context():
         _seed(db.session)
-        assert all(r.fee_late is None for r in db.session.scalars(db.select(CIPCARFee)))
+        rows = db.session.scalars(db.select(CIPCARFee)).all()
+        assert CIPC_AR_LATE_PENALTY == Decimal("150")
+        assert all(r.fee_late is not None for r in rows)
+        assert all(r.fee_late - r.fee_on_time == CIPC_AR_LATE_PENALTY for r in rows)
 
 
 def test_company_top_band_has_null_upper_and_3000(app):

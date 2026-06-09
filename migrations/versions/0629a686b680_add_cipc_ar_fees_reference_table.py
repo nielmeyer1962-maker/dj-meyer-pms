@@ -33,8 +33,9 @@ def upgrade():
 
     # Seed the bands from the single source of truth shared with the test fixtures (so
     # they cannot drift). Half-open [turnover_lower, turnover_upper): lower inclusive,
-    # upper exclusive; NULL upper = open-ended top band. fee_late is NULL on seed —
-    # see CIPC_AR_FEE_SEED for the confirmation note.
+    # upper exclusive; NULL upper = open-ended top band. (fee_late was NULL when this
+    # migration was first written; migration 7c1e0a9b4f23 later back-filled it, and
+    # CIPC_AR_FEE_SEED now derives it — see that seed for the note.)
     from app.models.cipc_ar_fee import CIPC_AR_FEE_SEED
 
     op.bulk_insert(cipc_ar_fees, CIPC_AR_FEE_SEED)

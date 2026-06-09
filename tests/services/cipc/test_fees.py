@@ -4,9 +4,9 @@ import pytest
 
 from app.extensions import db
 from app.models.cipc import CIPCAnnualInstance
-from app.models.cipc_ar_fee import CIPC_AR_FEE_SEED, CIPCARFee
+from app.models.cipc_ar_fee import CIPC_AR_FEE_SEED, CIPC_AR_LATE_PENALTY, CIPCARFee
 from app.models.client import Client, EntityType
-from app.services.cipc.fees import entity_class_for, fee_on_time_for
+from app.services.cipc.fees import entity_class_for, fee_late_for, fee_on_time_for
 
 # Rand → cents (the instance stores annual_turnover_cents).
 R = 100
@@ -101,6 +101,62 @@ def test_cc_on_time_fee(app, turnover_rand, expected_fee):
         assert fee_on_time_for(inst) == Decimal(expected_fee)
 
 
+# --- Company late fee = on-time + R150 ---
+
+
+@pytest.mark.parametrize(
+    "turnover_rand,expected_fee",
+    [
+        (0, 250),
+        (1_000_000, 600),
+        (10_000_000, 2150),
+        (25_000_000, 3150),
+    ],
+)
+def test_company_late_fee(app, turnover_rand, expected_fee):
+    with app.app_context():
+        _seed_fees()
+        inst = _instance(EntityType.PTY_LTD, turnover_rand)
+        assert fee_late_for(inst) == Decimal(expected_fee)
+
+
+# --- CC late fee = on-time + R150 ---
+
+
+@pytest.mark.parametrize(
+    "turnover_rand,expected_fee",
+    [
+        (0, 250),
+        (50_000_000, 4150),
+    ],
+)
+def test_cc_late_fee(app, turnover_rand, expected_fee):
+    with app.app_context():
+        _seed_fees()
+        inst = _instance(EntityType.CC, turnover_rand)
+        assert fee_late_for(inst) == Decimal(expected_fee)
+
+
+# --- Penalty recoverable for billing: late - on-time == R150 ---
+
+
+@pytest.mark.parametrize(
+    "entity_type,turnover_rand",
+    [
+        (EntityType.PTY_LTD, 0),
+        (EntityType.PTY_LTD, 25_000_000),
+        (EntityType.CC, 0),
+        (EntityType.CC, 50_000_000),
+    ],
+)
+def test_late_minus_on_time_is_fixed_penalty(app, entity_type, turnover_rand):
+    with app.app_context():
+        _seed_fees()
+        inst = _instance(entity_type, turnover_rand)
+        assert fee_late_for(inst) - fee_on_time_for(inst) == CIPC_AR_LATE_PENALTY
+        assert CIPC_AR_LATE_PENALTY == Decimal(150)
+
+
 # --- Uncaptured turnover ---
 
 
@@ -109,3 +165,4 @@ def test_fee_none_when_turnover_uncaptured(app):
         _seed_fees()
         inst = _instance(EntityType.PTY_LTD, None)
         assert fee_on_time_for(inst) is None
+        assert fee_late_for(inst) is None

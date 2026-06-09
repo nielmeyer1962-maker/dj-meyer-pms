@@ -3,8 +3,8 @@
 Looks the fee up from the cipc_ar_fees reference table (seeded by migration) by
 entity_class and turnover. Bands are half-open [turnover_lower, turnover_upper).
 
-Only the ON-TIME fee is derivable today; fee_late is NULL in the seed pending Tsego's
-confirmed figures, so fee_late_for returns None until those are filled in.
+Both the on-time and late fees are derivable: the late fee is the band's on-time fee plus
+a fixed penalty (see CIPC_AR_LATE_PENALTY), so fee_late_for mirrors fee_on_time_for.
 
 Turnover note: the reference table stores turnover in RAND, while
 CIPCAnnualInstance.annual_turnover_cents is in cents. The instance-level helpers convert
@@ -41,8 +41,8 @@ def entity_class_for(entity_type: EntityType) -> str:
         raise ValueError(f"{entity_type.name} does not file a CIPC annual return") from exc
 
 
-def _band_fee_on_time(entity_class: str, turnover_rand: Decimal) -> Decimal:
-    """Look up the on-time fee for a turnover (in rand) within an entity_class.
+def _band_for(entity_class: str, turnover_rand: Decimal) -> CIPCARFee:
+    """Look up the fee band row for a turnover (in rand) within an entity_class.
 
     Half-open match: turnover_lower <= turnover < turnover_upper (NULL upper = top band).
     Raises ValueError if turnover is negative or no band matches (a seed gap).
@@ -63,7 +63,7 @@ def _band_fee_on_time(entity_class: str, turnover_rand: Decimal) -> Decimal:
         raise ValueError(
             f"no cipc_ar_fees band for entity_class={entity_class!r}, turnover={turnover_rand}"
         )
-    return row.fee_on_time
+    return row
 
 
 def fee_on_time_for(instance: CIPCAnnualInstance) -> Decimal | None:
@@ -75,4 +75,16 @@ def fee_on_time_for(instance: CIPCAnnualInstance) -> Decimal | None:
         return None
     entity_class = entity_class_for(instance.client.entity_type)
     turnover_rand = Decimal(instance.annual_turnover_cents) / 100
-    return _band_fee_on_time(entity_class, turnover_rand)
+    return _band_for(entity_class, turnover_rand).fee_on_time
+
+
+def fee_late_for(instance: CIPCAnnualInstance) -> Decimal | None:
+    """The late-filing CIPC AR fee (in rand) for the instance — the band's on-time fee
+    plus the fixed CIPC_AR_LATE_PENALTY. Mirrors fee_on_time_for and returns None when
+    turnover is not yet captured. The penalty is recoverable as fee_late - fee_on_time.
+    """
+    if instance.annual_turnover_cents is None:
+        return None
+    entity_class = entity_class_for(instance.client.entity_type)
+    turnover_rand = Decimal(instance.annual_turnover_cents) / 100
+    return _band_for(entity_class, turnover_rand).fee_late
