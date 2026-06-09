@@ -168,7 +168,8 @@ def test_regenerate_obligations_creates_instances_and_flashes_count(app, client)
     resp = client.get(f"/clients/{client_id}/edit")
     assert resp.status_code == 200
     assert (
-        f"Regenerated obligations for Regen Test Co: added {n}, updated 0, removed 0.".encode()
+        f"Regenerated obligations for Regen Test Co: added {n}, updated 0, removed 0; "
+        f"CIPC added 0, updated 0, removed 0.".encode()
         in resp.data
     )
 
@@ -202,4 +203,7 @@ def test_regenerate_obligations_is_idempotent(app, client):
 
     # Second-call flash specifically says zero new obligations.
     resp = client.get(f"/clients/{client_id}/edit")
-    assert b"Regenerated obligations for Idem Co: added 0, updated 0, removed 0." in resp.data
+    assert (
+        b"Regenerated obligations for Idem Co: added 0, updated 0, removed 0; "
+        b"CIPC added 0, updated 0, removed 0." in resp.data
+    )
