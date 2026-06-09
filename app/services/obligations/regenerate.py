@@ -17,6 +17,7 @@ from typing import NamedTuple
 from app.extensions import db
 from app.models.client import Client
 from app.models.obligation import ObligationInstance, ObligationStatus, ObligationType
+from app.services.obligations.emp201 import generate_emp201
 from app.services.obligations.vat201 import generate_vat201
 
 
@@ -47,9 +48,11 @@ def regenerate(client: Client, today: date | None = None) -> RegenerateResult:
         )
     }
 
+    # Each generator gates on its own registration flag and returns only its own
+    # obligation_type, so their period keys never collide.
     generated_by_key: dict[tuple[ObligationType, date], ObligationInstance] = {
         (inst.obligation_type, inst.period_end): inst
-        for inst in generate_vat201(client, today=today)
+        for inst in (*generate_vat201(client, today=today), *generate_emp201(client, today=today))
     }
 
     added = updated = deleted = 0

@@ -284,3 +284,45 @@ def test_refresh_path_preserves_notes_on_pending(app):
         # the patch path, not the no-op path.
         expected = {inst.period_end: inst for inst in generate_vat201(c, today=date(2026, 1, 1))}
         assert refreshed.submission_due_date == expected[date(2026, 4, 30)].submission_due_date
+
+
+# --- EMP201 coexistence (Ticket 4e) ---
+
+
+def test_regenerate_emits_vat201_and_emp201_together(app):
+    """A client registered for both VAT and PAYE gets both obligation types in one
+    regenerate pass, keyed independently so neither crowds the other out."""
+    with app.app_context():
+        c = Client(
+            legal_name="VAT + PAYE Corp",
+            entity_type=EntityType.PTY_LTD,
+            has_vat=True,
+            vat_category=VatCategory.C,
+            vat_submission_method=VatSubmissionMethod.EFILING,
+            has_paye=True,
+        )
+        db.session.add(c)
+        db.session.commit()
+
+        result = regenerate(c, today=date(2026, 1, 1))
+        db.session.commit()
+
+        rows = _all_for_client(c.id)
+        vat = [r for r in rows if r.obligation_type is ObligationType.VAT201]
+        emp = [r for r in rows if r.obligation_type is ObligationType.EMP201]
+        # 12 monthly VAT201 (Cat C) + 12 monthly EMP201 in the 12-month window.
+        assert len(vat) == 12
+        assert len(emp) == 12
+        assert result == RegenerateResult(added=24, updated=0, deleted=0)
+
+
+def test_regenerate_skips_emp201_when_not_paye_registered(app):
+    """No PAYE registration → only VAT201 rows, no EMP201."""
+    with app.app_context():
+        c = _make_client()  # has_vat=True, has_paye defaults to False
+        regenerate(c, today=date(2026, 1, 1))
+        db.session.commit()
+
+        rows = _all_for_client(c.id)
+        assert all(r.obligation_type is ObligationType.VAT201 for r in rows)
+        assert not any(r.obligation_type is ObligationType.EMP201 for r in rows)
