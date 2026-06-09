@@ -1,11 +1,17 @@
 from datetime import date
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy.exc import IntegrityError
 
 from app.extensions import db
 from app.models.client import Client, EntityType
-from app.models.obligation import ObligationInstance, ObligationStatus, ObligationType
+from app.models.obligation import (
+    _PAYMENT_LEG_TYPES,
+    ObligationInstance,
+    ObligationStatus,
+    ObligationType,
+)
 from app.models.staff import Staff, StaffRole
 
 # --- Helpers ---
@@ -182,3 +188,65 @@ def test_notes_column_behaviour(app):
         db.session.commit()
         db.session.refresh(oi_none)
         assert oi_none.notes is None
+
+
+# --- ObligationStatus finalisation: IN_PROGRESS, has_payment_leg, is_done ---
+
+
+def test_in_progress_sits_between_pending_and_submitted():
+    """IN_PROGRESS is declared between PENDING and SUBMITTED in the lifecycle order."""
+    assert [s.name for s in ObligationStatus] == [
+        "PENDING",
+        "IN_PROGRESS",
+        "SUBMITTED",
+        "PAID",
+        "EXEMPT",
+    ]
+
+
+def test_vat201_has_payment_leg():
+    assert ObligationType.VAT201.has_payment_leg is True
+
+
+def test_payment_leg_map_covers_future_types():
+    """EMP201 and IRP6 are not yet ObligationType members, but the payment-leg map
+    must already cover them so is_done is correct the moment they are added."""
+    assert _PAYMENT_LEG_TYPES == {"VAT201", "EMP201", "IRP6"}
+
+
+@pytest.mark.parametrize(
+    "status,expected",
+    [
+        (ObligationStatus.PENDING, False),
+        (ObligationStatus.IN_PROGRESS, False),
+        (ObligationStatus.SUBMITTED, False),  # filed but unpaid → not done
+        (ObligationStatus.PAID, True),
+        (ObligationStatus.EXEMPT, True),
+    ],
+)
+def test_is_done_for_payment_leg_obligation(app, status, expected):
+    """VAT201 carries a payment leg, so done means PAID (or EXEMPT) — a SUBMITTED-but-
+    unpaid return is not finished."""
+    with app.app_context():
+        c = _make_client()
+        oi = ObligationInstance(status=status, **_instance_kwargs(c.id, date(2026, 4, 30)))
+        db.session.add(oi)
+        db.session.commit()
+        assert oi.is_done is expected
+
+
+def test_is_done_for_filing_only_obligation():
+    """A file-only obligation (no payment leg) is done once SUBMITTED, and EXEMPT is
+    always done. Uses a stub obligation_type because no file-only type is enum-modelled
+    yet; is_done reads only obligation_type.has_payment_leg and status."""
+    oi = ObligationInstance()
+    oi.obligation_type = SimpleNamespace(has_payment_leg=False)
+
+    oi.status = ObligationStatus.SUBMITTED
+    assert oi.is_done is True
+    oi.status = ObligationStatus.PENDING
+    assert oi.is_done is False
+    oi.status = ObligationStatus.IN_PROGRESS
+    assert oi.is_done is False
+    oi.status = ObligationStatus.EXEMPT
+    assert oi.is_done is True

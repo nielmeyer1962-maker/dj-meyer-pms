@@ -42,7 +42,8 @@ For each active client, derive recurring statutory obligations from their entity
 
 - Views: this week, next thirty days, overdue.
 - Filter by staff member, client, or obligation type.
-- Mark instance status: not started, in progress, submitted, completed, on hold.
+- Mark instance status: PENDING / IN_PROGRESS / SUBMITTED / PAID / EXEMPT.
+- OVERDUE and done/"completed" are not stored — they are derived at read time (OVERDUE = open status with a past due date; done = PAID for obligations with a payment leg, else SUBMITTED, or any EXEMPT row). ON_HOLD is deferred to Phase 2.
 
 **5. Manual reminders**
 
