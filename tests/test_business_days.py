@@ -87,3 +87,35 @@ def test_holiday_cache_populates_once_per_year():
     # Second call for the same year must reuse the cached set object, not rebuild it.
     business_days.last_business_day_of_month(2026, 6)
     assert business_days._HOLIDAY_CACHE[2026] is cached_set
+
+
+# --- add_business_days (forward counter; CIPC company deadline) ---
+
+
+def test_add_business_days_friday_plus_one_is_monday():
+    """Start is never counted: Fri 2026-03-13 + 1 business day = Mon 2026-03-16."""
+    assert business_days.add_business_days(date(2026, 3, 13), 1) == date(2026, 3, 16)
+
+
+def test_add_business_days_skips_public_holiday():
+    """Fri 2026-04-24 + 1 bd skips the weekend and Mon 27 Apr (Freedom Day) → Tue 28."""
+    assert business_days.add_business_days(date(2026, 4, 24), 1) == date(2026, 4, 28)
+
+
+def test_add_business_days_30_no_holidays_in_span():
+    """Thu 2026-01-15 + 30 bd = Thu 2026-02-26 (six clean weeks, no SA holiday between)."""
+    assert business_days.add_business_days(date(2026, 1, 15), 30) == date(2026, 2, 26)
+
+
+def test_add_business_days_30_across_easter_and_freedom_day():
+    """Mon 2026-03-16 + 30 bd = Thu 2026-04-30: the span crosses Good Friday (3 Apr),
+    Family Day (6 Apr) and Freedom Day (27 Apr), each pushing the count out a day."""
+    assert business_days.add_business_days(date(2026, 3, 16), 30) == date(2026, 4, 30)
+
+
+def test_add_business_days_rejects_non_positive():
+    import pytest
+
+    for bad in (0, -1):
+        with pytest.raises(ValueError):
+            business_days.add_business_days(date(2026, 1, 15), bad)
