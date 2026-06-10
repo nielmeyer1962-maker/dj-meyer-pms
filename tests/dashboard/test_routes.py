@@ -623,14 +623,23 @@ def test_cipc_reassign_to_nonexistent_staff_400(client, cipc_world):
     assert resp.status_code == 400
 
 
-def test_status_filter_excludes_cipc(client, cipc_world):
-    """The Status filter is an obligation-only narrowing: selecting one drops CIPC rows
-    (no CIPC row can carry an ObligationStatus). Asserts on a CIPC row's due-date string —
-    a row-only marker (the "CIPC AR" label lives in the Type dropdown, the client name in
-    the Client dropdown)."""
+def test_status_filter_leaves_cipc_visible(client, cipc_world):
+    """The Status filter narrows obligation rows ONLY — it never includes or excludes
+    CIPC. With a CIPC row in the set, type=All & status=PENDING still returns the CIPC
+    row. Asserts on a CIPC due-date string (a row-only marker)."""
     resp = client.get("/dashboard/?status=PENDING")
     assert resp.status_code == 200
-    assert "2026-05-08" not in resp.data.decode()  # generated_overdue due date, TODAY-5
+    assert "2026-05-08" in resp.data.decode()  # generated_overdue due date, TODAY-5
+
+
+def test_cipc_ar_ignores_status(client, cipc_world):
+    """type=CIPC_AR shows the CIPC rows regardless of a stray Status value — never a blank
+    list. CIPC visibility is governed by the Type filter alone."""
+    resp = client.get("/dashboard/?type=CIPC_AR&status=PENDING")
+    assert resp.status_code == 200
+    body = resp.data.decode()
+    assert "2026-05-08" in body  # generated_overdue still visible
+    assert "2026-05-11" in body  # ar_submitted_past still visible
 
 
 def test_view_overdue_includes_only_overdue_cipc(client, cipc_world):

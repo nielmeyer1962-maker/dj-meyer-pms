@@ -146,12 +146,13 @@ def list_obligations():
     else:
         items = []
 
-    # Fold the CIPC Annual Returns into the same list. The Status filter is an
-    # obligation-only narrowing (locked decision): when it is set, no CIPC row can carry
-    # that ObligationStatus, so CIPC is excluded entirely. The Type filter likewise
-    # includes CIPC only when unset or set to the CIPC AR sentinel. Assignee + View
-    # filters apply to both, via the CIPC column equivalents (due_date, overdue predicate).
-    if status_arg not in ObligationStatus.__members__ and type_arg in ("", _CIPC_TYPE_ARG):
+    # Fold the CIPC Annual Returns into the same list. CIPC visibility is governed by the
+    # Type filter ALONE: included when Type is unset/All or the CIPC AR sentinel, excluded
+    # only when Type names a specific ObligationType (VAT201/EMP201). The Status filter
+    # narrows the obligation query only and never includes or excludes CIPC, so a
+    # type=CIPC AR view is never blanked by a stray Status value. Assignee + View filters
+    # apply to both, via the CIPC column equivalents (due_date, overdue predicate).
+    if type_arg in ("", _CIPC_TYPE_ARG):
         cipc_stmt = (
             db.select(CIPCAnnualInstance)
             .options(
