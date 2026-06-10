@@ -831,3 +831,91 @@ def test_client_filter_preserved_across_action_redirect(client, world):
     resp = client.post(f"/dashboard/obligations/{oi_id}/mark-submitted?client={client_id}")
     assert resp.status_code == 302
     assert f"client={client_id}" in resp.headers["Location"]
+
+
+# --- ITR14 (file-only) surfaces on the dashboard (Ticket 4a chunk 4) ---
+
+
+@pytest.fixture
+def itr14_world(app):
+    """One client with a single PENDING ITR14 obligation, plus a CIPC AR so the
+    type=ITR14 filter's CIPC-exclusion can be asserted. Distinct due-date markers."""
+    c = Client(legal_name="Gamma Pty Ltd", entity_type=EntityType.PTY_LTD)
+    db.session.add(c)
+    niel = Staff(code="NIEL", full_name="Niel Meyer", role=StaffRole.TAX)
+    db.session.add(niel)
+    db.session.commit()
+
+    itr14 = ObligationInstance(
+        client_id=c.id,
+        obligation_type=ObligationType.ITR14,
+        period_start=date(2025, 3, 1),
+        period_end=date(2026, 2, 28),
+        submission_due_date=date(2027, 3, 1),
+        payment_due_date=date(2027, 3, 1),
+        status=ObligationStatus.PENDING,
+        assignee_id=niel.id,
+    )
+    cipc = CIPCAnnualInstance(
+        client_id=c.id,
+        anniversary_date=date(2025, 3, 15),
+        due_date=date(2026, 3, 15),
+        status=CIPCAnnualStatus.GENERATED,
+        assignee_id=niel.id,
+    )
+    db.session.add_all([itr14, cipc])
+    db.session.commit()
+    return {"itr14_id": itr14.id, "itr14_due": "2027-03-01", "cipc_due": "2026-03-15"}
+
+
+def test_itr14_renders_in_list(client, itr14_world):
+    body = client.get("/dashboard/").data.decode()
+    assert "Gamma Pty Ltd" in body
+    assert itr14_world["itr14_due"] in body  # the ITR14 row's due date
+
+
+def test_type_filter_itr14_shows_only_itr14_and_excludes_cipc(client, itr14_world):
+    """type=ITR14 narrows to the ITR14 obligation and, per the existing logic (a named
+    ObligationType drops CIPC), excludes the CIPC AR row."""
+    body = client.get("/dashboard/?type=ITR14").data.decode()
+    assert itr14_world["itr14_due"] in body
+    assert itr14_world["cipc_due"] not in body
+
+
+def test_type_filter_includes_itr14_option_and_repaints(client, itr14_world):
+    """The Type dropdown gained ITR14 automatically (enum-driven) and repaints the
+    selection."""
+    body = client.get("/dashboard/?type=ITR14").data.decode()
+    assert '<option value="ITR14" selected>ITR14</option>' in body
+
+
+def test_itr14_pending_row_actions(client, itr14_world):
+    """PENDING ITR14 offers Start / Mark submitted / Mark exempt — and never Mark paid."""
+    oid = itr14_world["itr14_id"]
+    body = client.get("/dashboard/").data.decode()
+    assert f"/dashboard/obligations/{oid}/mark-in-progress" in body
+    assert f"/dashboard/obligations/{oid}/mark-submitted" in body
+    assert f"/dashboard/obligations/{oid}/mark-exempt" in body
+    assert f"/dashboard/obligations/{oid}/mark-paid" not in body
+
+
+def test_itr14_in_progress_row_actions(client, itr14_world):
+    """IN_PROGRESS ITR14 offers Mark submitted / Revert to pending / Mark exempt — no
+    Mark paid."""
+    oid = itr14_world["itr14_id"]
+    client.post(f"/dashboard/obligations/{oid}/mark-in-progress")
+    body = client.get("/dashboard/").data.decode()
+    assert f"/dashboard/obligations/{oid}/mark-submitted" in body
+    assert f"/dashboard/obligations/{oid}/revert-to-pending" in body
+    assert f"/dashboard/obligations/{oid}/mark-exempt" in body
+    assert f"/dashboard/obligations/{oid}/mark-paid" not in body
+
+
+def test_itr14_submitted_row_is_terminal(client, itr14_world):
+    """Once SUBMITTED, a file-only ITR14 is done → terminal: no action buttons at all."""
+    oid = itr14_world["itr14_id"]
+    client.post(f"/dashboard/obligations/{oid}/mark-submitted")
+    assert db.session.get(ObligationInstance, oid).status is ObligationStatus.SUBMITTED
+    body = client.get("/dashboard/").data.decode()
+    for action in ("mark-paid", "mark-submitted", "mark-exempt", "mark-in-progress"):
+        assert f"/dashboard/obligations/{oid}/{action}" not in body

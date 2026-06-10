@@ -120,6 +120,12 @@ def from_obligation(instance: ObligationInstance, today: date) -> DashboardItem:
     # each judged finished by the same rule the rest of the app uses — never a dashboard-
     # local re-derivation. Reassign follows the same line: you only reassign open work.
     is_open = not instance.is_done
+    # Actions are gated on is_done, not status alone: a done obligation is terminal and
+    # offers nothing. This makes SUBMITTED correct for BOTH kinds — a payment-leg type
+    # (is_done only at PAID) still offers "Mark paid" at SUBMITTED, while a file-only type
+    # (ITR14, EMP501, future ITR12 — done at SUBMITTED) becomes terminal. Keyed on the
+    # model's has_payment_leg via is_done, never on a specific obligation_type.
+    actions = () if instance.is_done else _OBLIGATION_ACTIONS[status]
     return DashboardItem(
         kind=KIND_OBLIGATION,
         id=instance.id,
@@ -132,7 +138,7 @@ def from_obligation(instance: ObligationInstance, today: date) -> DashboardItem:
         is_overdue=obligation_predicates.is_overdue(instance, today),
         is_open=is_open,
         notes=instance.notes,
-        actions=_OBLIGATION_ACTIONS[status],
+        actions=actions,
         reassignable=is_open,
     )
 
