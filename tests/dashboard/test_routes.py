@@ -6,6 +6,7 @@ from unittest.mock import patch
 import pytest
 
 from app.extensions import db
+from app.models.cipc import CIPCAnnualInstance, CIPCAnnualStatus
 from app.models.client import Client, EntityType
 from app.models.obligation import ObligationInstance, ObligationStatus, ObligationType
 from app.models.staff import Staff, StaffRole
@@ -489,3 +490,159 @@ def test_list_renders_detail_link_for_each_row(client, world):
     for key in ("pending_overdue_id", "pending_future_id", "submitted_id", "unassigned_id"):
         oi_id = world[key]
         assert f'href="/dashboard/obligations/{oi_id}"' in body
+
+
+# --- CIPC Annual Returns folded into the dashboard (chunk 5) ---
+
+
+@pytest.fixture
+def cipc_world(app):
+    """A CIPC-only world: one client + Tsego + four CIPCAnnualInstances spanning the
+    workflow and a mix of past/future due dates. Returns int IDs only (same discipline
+    as `world`). Due dates are relative to the frozen TODAY."""
+    c = Client(legal_name="Beta Holdings Pty Ltd", entity_type=EntityType.PTY_LTD)
+    db.session.add(c)
+    tsego = Staff(code="TSEGO", full_name="Tsego Mogale", role=StaffRole.SECRETARIAL)
+    db.session.add(tsego)
+    db.session.commit()
+
+    def _mk(status, due, anniversary, assignee_id=None):
+        inst = CIPCAnnualInstance(
+            client_id=c.id,
+            anniversary_date=anniversary,
+            due_date=due,
+            status=status,
+            assignee_id=assignee_id,
+        )
+        db.session.add(inst)
+        return inst
+
+    generated_overdue = _mk(
+        CIPCAnnualStatus.GENERATED, TODAY - timedelta(days=5), date(2025, 1, 10), tsego.id
+    )
+    invoiced_future = _mk(
+        CIPCAnnualStatus.INVOICED, TODAY + timedelta(days=10), date(2025, 2, 10), tsego.id
+    )
+    ar_submitted_past = _mk(
+        CIPCAnnualStatus.AR_SUBMITTED, TODAY - timedelta(days=2), date(2025, 3, 10), tsego.id
+    )
+    closed_unassigned = _mk(
+        CIPCAnnualStatus.CLOSED, TODAY + timedelta(days=20), date(2025, 4, 10), None
+    )
+    db.session.commit()
+    return {
+        "client_id": c.id,
+        "tsego_id": tsego.id,
+        "generated_overdue_id": generated_overdue.id,
+        "invoiced_future_id": invoiced_future.id,
+        "ar_submitted_past_id": ar_submitted_past.id,
+        "closed_unassigned_id": closed_unassigned.id,
+    }
+
+
+def test_list_includes_cipc_rows(client, cipc_world):
+    resp = client.get("/dashboard/")
+    assert resp.status_code == 200
+    body = resp.data.decode()
+    assert "Beta Holdings Pty Ltd" in body
+    assert "CIPC AR" in body
+    # The generated row is past-due and pre-filing → OVERDUE badge.
+    assert "OVERDUE" in body
+
+
+def test_list_renders_cipc_action_buttons(client, cipc_world):
+    """A GENERATED row exposes its forward transition plus the Service-declined off-ramp;
+    CIPC rows have no detail anchor (no detail page yet)."""
+    resp = client.get("/dashboard/")
+    body = resp.data.decode()
+    gid = cipc_world["generated_overdue_id"]
+    assert f"/dashboard/cipc/{gid}/mark-invoiced" in body
+    assert f"/dashboard/cipc/{gid}/mark-declined" in body
+    assert "Service declined" in body
+    assert f'href="/dashboard/obligations/{gid}"' not in body
+
+
+def test_mark_cipc_invoiced_advances_and_redirects(client, cipc_world):
+    gid = cipc_world["generated_overdue_id"]
+    resp = client.post(f"/dashboard/cipc/{gid}/mark-invoiced")
+    assert resp.status_code == 302
+    assert resp.headers["Location"].endswith("/dashboard/")
+    assert db.session.get(CIPCAnnualInstance, gid).status is CIPCAnnualStatus.INVOICED
+
+
+def test_mark_cipc_invoiced_illegal_flashes_no_change(client, cipc_world):
+    ar_id = cipc_world["ar_submitted_past_id"]
+    resp = client.post(f"/dashboard/cipc/{ar_id}/mark-invoiced", follow_redirects=True)
+    assert resp.status_code == 200
+    assert b"cannot mark_invoiced" in resp.data
+    assert db.session.get(CIPCAnnualInstance, ar_id).status is CIPCAnnualStatus.AR_SUBMITTED
+
+
+def test_mark_cipc_declined_from_generated(client, cipc_world):
+    gid = cipc_world["generated_overdue_id"]
+    resp = client.post(f"/dashboard/cipc/{gid}/mark-declined")
+    assert resp.status_code == 302
+    assert db.session.get(CIPCAnnualInstance, gid).status is CIPCAnnualStatus.DECLINED
+
+
+def test_mark_cipc_declined_illegal_once_filed(client, cipc_world):
+    """AR already filed: the Service-declined off-ramp is closed."""
+    ar_id = cipc_world["ar_submitted_past_id"]
+    resp = client.post(f"/dashboard/cipc/{ar_id}/mark-declined", follow_redirects=True)
+    assert resp.status_code == 200
+    assert b"cannot mark_declined" in resp.data
+    assert db.session.get(CIPCAnnualInstance, ar_id).status is CIPCAnnualStatus.AR_SUBMITTED
+
+
+def test_mark_cipc_closed_from_ar_submitted(client, cipc_world):
+    ar_id = cipc_world["ar_submitted_past_id"]
+    resp = client.post(f"/dashboard/cipc/{ar_id}/mark-closed")
+    assert resp.status_code == 302
+    assert db.session.get(CIPCAnnualInstance, ar_id).status is CIPCAnnualStatus.CLOSED
+
+
+def test_cipc_action_redirect_preserves_filters(client, cipc_world):
+    gid = cipc_world["generated_overdue_id"]
+    resp = client.post(f"/dashboard/cipc/{gid}/mark-invoiced?assignee=TSEGO&view=overdue")
+    assert resp.status_code == 302
+    loc = resp.headers["Location"]
+    assert "assignee=TSEGO" in loc
+    assert "view=overdue" in loc
+
+
+def test_cipc_reassign_to_unassigned_sets_null(client, cipc_world):
+    gid = cipc_world["generated_overdue_id"]
+    resp = client.post(f"/dashboard/cipc/{gid}/reassign", data={"assignee_id": ""})
+    assert resp.status_code == 302
+    assert db.session.get(CIPCAnnualInstance, gid).assignee_id is None
+
+
+def test_cipc_reassign_to_nonexistent_staff_400(client, cipc_world):
+    gid = cipc_world["generated_overdue_id"]
+    resp = client.post(f"/dashboard/cipc/{gid}/reassign", data={"assignee_id": "9999"})
+    assert resp.status_code == 400
+
+
+def test_status_filter_excludes_cipc(client, cipc_world):
+    """The Status filter is an obligation-only narrowing: selecting one drops CIPC rows
+    (no CIPC row can carry an ObligationStatus)."""
+    resp = client.get("/dashboard/?status=PENDING")
+    assert resp.status_code == 200
+    assert "CIPC AR" not in resp.data.decode()
+
+
+def test_view_overdue_includes_only_overdue_cipc(client, cipc_world):
+    """view=overdue keeps the pre-filing past-due row; the past-but-filed AR_SUBMITTED row
+    and the future INVOICED row are excluded."""
+    resp = client.get("/dashboard/?view=overdue")
+    body = resp.data.decode()
+    assert "2026-05-08" in body  # generated_overdue, due TODAY-5
+    assert "2026-05-11" not in body  # ar_submitted_past (filed → not overdue)
+    assert "2026-05-23" not in body  # invoiced_future
+
+
+def test_assignee_filter_applies_to_cipc(client, cipc_world):
+    resp = client.get("/dashboard/?assignee=TSEGO")
+    body = resp.data.decode()
+    assert "2026-05-08" in body  # generated_overdue (Tsego)
+    assert "2026-06-02" not in body  # closed_unassigned (no assignee) excluded

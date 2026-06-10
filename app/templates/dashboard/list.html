@@ -56,7 +56,11 @@
       {% for item in items %}
         <tr>
           <td>
-            <a href="{{ url_for('dashboard.obligation_detail', obligation_id=item.id) }}">#{{ item.id }}</a>
+            {% if item.kind == 'obligation' %}
+              <a href="{{ url_for('dashboard.obligation_detail', obligation_id=item.id) }}">#{{ item.id }}</a>
+            {% else %}
+              #{{ item.id }}
+            {% endif %}
             {% if item.notes %}<span title="Has notes" aria-label="Has notes">📝</span>{% endif %}
           </td>
           <td>{{ item.client.legal_name if item.client else "—" }}</td>
@@ -79,15 +83,25 @@
           <td class="text-end">
             <div class="btn-group btn-group-sm" role="group">
               {% for action in item.actions %}
-                <form method="post" action="{{ url_for(action_endpoints[action.key], obligation_id=item.id, **request.args) }}" class="d-inline">
+                {% if item.kind == 'obligation' %}
+                  {% set action_url = url_for(obligation_action_endpoints[action.key], obligation_id=item.id, **request.args) %}
+                {% else %}
+                  {% set action_url = url_for(cipc_action_endpoints[action.key], cipc_id=item.id, **request.args) %}
+                {% endif %}
+                <form method="post" action="{{ action_url }}" class="d-inline">
                   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                   <button type="submit" class="btn btn-sm btn-outline-{{ action.style }}">{{ action.label }}</button>
                 </form>
               {% endfor %}
               {% if item.reassignable %}
+                {% if item.kind == 'obligation' %}
+                  {% set reassign_url = url_for('dashboard.reassign_obligation', obligation_id=item.id) %}
+                {% else %}
+                  {% set reassign_url = url_for('dashboard.reassign_cipc', cipc_id=item.id) %}
+                {% endif %}
                 <button type="button" class="btn btn-sm btn-outline-secondary"
                         data-bs-toggle="modal" data-bs-target="#reassignModal"
-                        data-obligation-id="{{ item.id }}"
+                        data-reassign-url="{{ reassign_url }}"
                         data-client-name="{{ item.client.legal_name if item.client else '' }}">
                   Reassign
                 </button>
@@ -102,9 +116,9 @@
   </table>
 </div>
 
-<!-- Single shared reassign modal — locked decision §10. The trigger button's
-     data-obligation-id is read by the JS below; the modal form's action is
-     rewritten to point at the matching obligation each time the modal opens. -->
+<!-- Single shared reassign modal — locked decision §10. The trigger button carries a
+     fully-resolved data-reassign-url (obligation or CIPC); the JS below points the modal
+     form's action at it, appending the current filter query string, each time it opens. -->
 <div class="modal fade" id="reassignModal" tabindex="-1" aria-hidden="true">
   <div class="modal-dialog">
     <form method="post" id="reassignForm">
@@ -135,10 +149,10 @@
     const queryString = window.location.search;  // preserves current filter args
     modal.addEventListener("show.bs.modal", function (event) {
       const trigger = event.relatedTarget;
-      const id = trigger.getAttribute("data-obligation-id");
+      const reassignUrl = trigger.getAttribute("data-reassign-url");
       const client = trigger.getAttribute("data-client-name");
-      form.action = "/dashboard/obligations/" + id + "/reassign" + queryString;
-      title.textContent = client ? "Reassign — " + client : "Reassign obligation";
+      form.action = reassignUrl + queryString;
+      title.textContent = client ? "Reassign — " + client : "Reassign";
     });
   })();
 </script>

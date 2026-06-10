@@ -6,11 +6,31 @@ from flask import Blueprint, abort, flash, redirect, render_template, request, u
 from sqlalchemy.orm import selectinload
 
 from app.dashboard.forms import NotesForm, ReassignForm
-from app.dashboard.items import from_obligation
+from app.dashboard.items import from_cipc, from_obligation
 from app.extensions import db
+from app.models.cipc import CIPCAnnualInstance
 from app.models.client import Client
 from app.models.obligation import ObligationInstance, ObligationStatus
 from app.models.staff import Staff
+from app.services.cipc.predicates import overdue_filter as cipc_overdue_filter
+from app.services.cipc.transitions import (
+    mark_ar_submitted as cipc_mark_ar_submitted,
+)
+from app.services.cipc.transitions import (
+    mark_bo_submitted as cipc_mark_bo_submitted,
+)
+from app.services.cipc.transitions import (
+    mark_closed as cipc_mark_closed,
+)
+from app.services.cipc.transitions import (
+    mark_declined as cipc_mark_declined,
+)
+from app.services.cipc.transitions import (
+    mark_invoice_paid as cipc_mark_invoice_paid,
+)
+from app.services.cipc.transitions import (
+    mark_invoiced as cipc_mark_invoiced,
+)
 from app.services.obligations.predicates import is_overdue, overdue_filter
 from app.services.obligations.transitions import (
     mark_exempt,
@@ -24,15 +44,23 @@ from app.utils.staff import UNASSIGNED_SENTINEL, get_active_staff
 
 bp = Blueprint("dashboard", __name__, url_prefix="/dashboard")
 
-# Maps a DashboardItem.Action.key to the Flask endpoint that performs it. Lives here (the
-# presentation wiring) rather than in the Flask-free adapter; the list template resolves
-# each action button through it.
+# Maps a DashboardItem.Action.key to the Flask endpoint that performs it, one map per
+# DashboardItem.kind. Lives here (the presentation wiring) rather than in the Flask-free
+# adapter; the list template resolves each action button through the map for its kind.
 _OBLIGATION_ACTION_ENDPOINTS = {
     "mark_in_progress": "dashboard.mark_obligation_in_progress",
     "mark_submitted": "dashboard.mark_obligation_submitted",
     "revert_to_pending": "dashboard.revert_obligation_to_pending",
     "mark_exempt": "dashboard.mark_obligation_exempt",
     "mark_paid": "dashboard.mark_obligation_paid",
+}
+_CIPC_ACTION_ENDPOINTS = {
+    "mark_invoiced": "dashboard.mark_cipc_invoiced",
+    "mark_invoice_paid": "dashboard.mark_cipc_invoice_paid",
+    "mark_bo_submitted": "dashboard.mark_cipc_bo_submitted",
+    "mark_ar_submitted": "dashboard.mark_cipc_ar_submitted",
+    "mark_closed": "dashboard.mark_cipc_closed",
+    "mark_declined": "dashboard.mark_cipc_declined",
 }
 
 
@@ -93,13 +121,53 @@ def list_obligations():
     # query (filters, ordering, selectinload) is unchanged — only the row shape is.
     items = [from_obligation(oi, today) for oi in db.session.scalars(stmt).all()]
 
+    # Fold the CIPC Annual Returns into the same list. The Status filter is an
+    # obligation-only narrowing (locked decision): when it is set, no CIPC row can carry
+    # that ObligationStatus, so CIPC is excluded entirely. Assignee + View filters apply
+    # to both, via the CIPC column equivalents (due_date, its own overdue predicate).
+    if status_arg not in ObligationStatus.__members__:
+        cipc_stmt = (
+            db.select(CIPCAnnualInstance)
+            .options(
+                selectinload(CIPCAnnualInstance.client),
+                selectinload(CIPCAnnualInstance.assignee),
+            )
+            .join(Client, CIPCAnnualInstance.client_id == Client.id)
+        )
+        if assignee_arg == UNASSIGNED_SENTINEL:
+            cipc_stmt = cipc_stmt.where(CIPCAnnualInstance.assignee_id.is_(None))
+        elif assignee_arg:
+            staff_match = next((s for s in active_staff if s.code == assignee_arg), None)
+            if staff_match is not None:
+                cipc_stmt = cipc_stmt.where(CIPCAnnualInstance.assignee_id == staff_match.id)
+
+        if view_arg == "this_week":
+            cipc_stmt = cipc_stmt.where(
+                CIPCAnnualInstance.due_date >= today,
+                CIPCAnnualInstance.due_date <= today + timedelta(days=7),
+            )
+        elif view_arg == "next_30":
+            cipc_stmt = cipc_stmt.where(
+                CIPCAnnualInstance.due_date >= today,
+                CIPCAnnualInstance.due_date <= today + timedelta(days=30),
+            )
+        elif view_arg == "overdue":
+            cipc_stmt = cipc_stmt.where(cipc_overdue_filter(today))
+
+        items.extend(from_cipc(ci, today) for ci in db.session.scalars(cipc_stmt).all())
+
+    # Merge-sort the two row sources by due date, then client name — the same ordering the
+    # obligation-only list used before CIPC was folded in.
+    items.sort(key=lambda it: (it.due_date, it.client.legal_name if it.client else ""))
+
     reassign_form = ReassignForm()
     reassign_form.assignee_id.choices = _reassign_choices(active_staff)
 
     return render_template(
         "dashboard/list.html",
         items=items,
-        action_endpoints=_OBLIGATION_ACTION_ENDPOINTS,
+        obligation_action_endpoints=_OBLIGATION_ACTION_ENDPOINTS,
+        cipc_action_endpoints=_CIPC_ACTION_ENDPOINTS,
         active_staff=active_staff,
         unassigned_sentinel=UNASSIGNED_SENTINEL,
         reassign_form=reassign_form,
@@ -224,24 +292,88 @@ def mark_obligation_exempt(obligation_id: int):
     return _redirect_after_action(obligation_id)
 
 
+def _parse_assignee_id(raw: str) -> int | None:
+    """Resolve a reassign form value to a staff id, or None for Unassigned. Validates
+    against the live staff table — must be an existing AND active staff member; inactive
+    or unknown ids abort(400). Inactive staff are hard-excluded from reassignment via the
+    API, not only from the dropdown."""
+    if raw == "":
+        return None
+    try:
+        staff_id = int(raw)
+    except ValueError:
+        abort(400)
+    staff = db.session.get(Staff, staff_id)
+    if staff is None or not staff.active:
+        abort(400)
+    return staff.id
+
+
 @bp.post("/obligations/<int:obligation_id>/reassign")
 def reassign_obligation(obligation_id: int):
     instance = db.get_or_404(ObligationInstance, obligation_id)
-    raw = request.form.get("assignee_id", "")
-    if raw == "":
-        instance.assignee_id = None
-    else:
-        # Validate against the live staff table — must be an existing AND active
-        # staff member. Inactive staff are hard-excluded from reassignment via
-        # the API, not only from the dropdown.
-        try:
-            staff_id = int(raw)
-        except ValueError:
-            abort(400)
-        staff = db.session.get(Staff, staff_id)
-        if staff is None or not staff.active:
-            abort(400)
-        instance.assignee_id = staff.id
+    instance.assignee_id = _parse_assignee_id(request.form.get("assignee_id", ""))
     db.session.commit()
     flash(f"Obligation {instance.id} reassigned.", "success")
     return _redirect_after_action(obligation_id)
+
+
+# --- CIPC Annual Return action handlers. Same shape as the obligation handlers, but the
+#     CIPC AR has no detail page, so every action redirects to the filter-preserving list.
+#     mark_declined is the "Service declined" off-ramp. ---
+
+
+def _apply_cipc_transition(cipc_id: int, action) -> None:
+    instance = db.get_or_404(CIPCAnnualInstance, cipc_id)
+    try:
+        action(instance)
+    except ValueError as exc:
+        flash(str(exc), "danger")
+        return
+    db.session.commit()
+    flash(f"CIPC AR {instance.id} → {instance.status.name}.", "success")
+
+
+@bp.post("/cipc/<int:cipc_id>/mark-invoiced")
+def mark_cipc_invoiced(cipc_id: int):
+    _apply_cipc_transition(cipc_id, cipc_mark_invoiced)
+    return _redirect_to_list_preserving_filters()
+
+
+@bp.post("/cipc/<int:cipc_id>/mark-invoice-paid")
+def mark_cipc_invoice_paid(cipc_id: int):
+    _apply_cipc_transition(cipc_id, cipc_mark_invoice_paid)
+    return _redirect_to_list_preserving_filters()
+
+
+@bp.post("/cipc/<int:cipc_id>/mark-bo-submitted")
+def mark_cipc_bo_submitted(cipc_id: int):
+    _apply_cipc_transition(cipc_id, cipc_mark_bo_submitted)
+    return _redirect_to_list_preserving_filters()
+
+
+@bp.post("/cipc/<int:cipc_id>/mark-ar-submitted")
+def mark_cipc_ar_submitted(cipc_id: int):
+    _apply_cipc_transition(cipc_id, cipc_mark_ar_submitted)
+    return _redirect_to_list_preserving_filters()
+
+
+@bp.post("/cipc/<int:cipc_id>/mark-closed")
+def mark_cipc_closed(cipc_id: int):
+    _apply_cipc_transition(cipc_id, cipc_mark_closed)
+    return _redirect_to_list_preserving_filters()
+
+
+@bp.post("/cipc/<int:cipc_id>/mark-declined")
+def mark_cipc_declined(cipc_id: int):
+    _apply_cipc_transition(cipc_id, cipc_mark_declined)
+    return _redirect_to_list_preserving_filters()
+
+
+@bp.post("/cipc/<int:cipc_id>/reassign")
+def reassign_cipc(cipc_id: int):
+    instance = db.get_or_404(CIPCAnnualInstance, cipc_id)
+    instance.assignee_id = _parse_assignee_id(request.form.get("assignee_id", ""))
+    db.session.commit()
+    flash(f"CIPC AR {instance.id} reassigned.", "success")
+    return _redirect_to_list_preserving_filters()
