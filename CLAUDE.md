@@ -27,10 +27,10 @@ If a new requirement seems to drift toward any of the above, stop and confirm wi
 | NIEL | Niel Meyer (Daniel Jacobus Meyer) | niel@djmeyer.co.za | Tax & Accounting — **Principal / owner** | Involved in everything except secretarial. SAIPA No. 03393. |
 | JEANNE | Jeanne-Marie Meyer | jeanne-marie@djmeyer.co.za | Tax & Accounting — **Assistant Principal** | Niel's daughter; successor / future owner. SAIPA No. 62098. |
 | CANDI | Candice van der Merwe | candice@djmeyer.co.za *(TBC)* | Tax & Accounting | |
-| STACEY | Stacey Roux | stacy@djmeyer.co.za | Tax & Accounting (tax) | Married to Dewalt. |
+| STACY | Stacy Roux | stacy@djmeyer.co.za | Tax & Accounting (tax) | Married to Dewald. |
 | QUINLYN | Quinlyn Breedske | quinlyn@djmeyer.co.za | Tax & Accounting | |
 | CAROLINE | Caroline Lombard | caroline@djmeyer.co.za | Tax & Accounting | |
-| DEWALT | Dewalt Roux | dewalt@djmeyer.co.za *(TBC)* | Tax & Accounting (back office) | Stacey's husband. Supports Candice & Stacey; converts source data to Excel for import into **CaseWare** (where final AFS are prepared). Not client-allocated. |
+| DEWALD | Dewald Roux | dewald@djmeyer.co.za *(TBC)* | Tax & Accounting (back office) | Stacy's husband. Supports Candice & Stacy; converts source data to Excel for import into **CaseWare** (where final AFS are prepared). Not client-allocated. |
 | TSEGO | Tsego Mogale | tsego@djmeyer.co.za | Secretarial (runs the dept) | CIPC compliance, Beneficial Ownership, **Workmen's Compensation (COIDA)**, and SARS registrations. |
 
 `StaffRole` enum mapping: Tax & Accounting → `TAX`, Secretarial → `SECRETARIAL`.
@@ -39,7 +39,7 @@ The firm is **SAIPA-registered, Practice No. 03393**, at 6 Eleventh Avenue, Nort
 
 ### How the work is divided
 
-**Tax & Accounting team** (Niel, Jeanne Marie, Candice, Stacey, Quinlyn, Caroline):
+**Tax & Accounting team** (Niel, Jeanne Marie, Candice, Stacy, Quinlyn, Caroline):
 
 - Each client is **allocated to one** tax/accounting staff member who owns all of that
   client's work.
@@ -49,7 +49,7 @@ The firm is **SAIPA-registered, Practice No. 03393**, at 6 Eleventh Avenue, Nort
   **ITR14** (company income tax), and submit **ITR12** (individual income tax) for the
   company's members/owners.
 - Handle all **SARS queries and requests** for their allocated clients.
-- **Back office (Dewalt Roux)** supports Candice & Stacey — converts source data to Excel
+- **Back office (Dewald Roux)** supports Candice & Stacy — converts source data to Excel
   for import into **CaseWare**, where the final Annual Financial Statements are prepared.
   Not allocated clients of his own.
 
