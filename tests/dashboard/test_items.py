@@ -152,6 +152,17 @@ def test_every_obligation_status_has_an_action_entry():
         assert from_obligation(_obligation(status), TODAY) is not None
 
 
+@pytest.mark.parametrize("status", list(ObligationStatus))
+def test_obligation_is_open_is_negation_of_is_done(status):
+    """is_open / reassignable are delegated to the model's is_done, not re-derived from
+    the status set — so file-only types (done at SUBMITTED) and payment-leg types (done
+    at PAID) are both judged by the same rule the rest of the app uses."""
+    oi = _obligation(status)
+    item = from_obligation(oi, TODAY)
+    assert item.is_open is (not oi.is_done)
+    assert item.reassignable is (not oi.is_done)
+
+
 # --- CIPC mapper: field bridging ---
 
 

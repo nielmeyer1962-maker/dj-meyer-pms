@@ -40,9 +40,6 @@ CIPC_TYPE_LABEL = "CIPC AR"
 # CIPC AR has no reporting period; the period column shows this placeholder.
 _NO_PERIOD = "—"
 
-# Obligation statuses that are finished work: no more transitions, not reassignable.
-_OBLIGATION_TERMINAL = (ObligationStatus.PAID, ObligationStatus.EXEMPT)
-
 
 @dataclass(frozen=True)
 class Action:
@@ -118,7 +115,11 @@ _CIPC_DECLINE = Action("mark_declined", "Service declined", "danger")
 def from_obligation(instance: ObligationInstance, today: date) -> DashboardItem:
     """Map an ObligationInstance to a DashboardItem. `today` drives the overdue badge."""
     status = instance.status
-    non_terminal = status not in _OBLIGATION_TERMINAL
+    # "Open" is the exact negation of the model's is_done property, so a payment-leg
+    # obligation (done only at PAID) and a future file-only one (done at SUBMITTED) are
+    # each judged finished by the same rule the rest of the app uses — never a dashboard-
+    # local re-derivation. Reassign follows the same line: you only reassign open work.
+    is_open = not instance.is_done
     return DashboardItem(
         kind=KIND_OBLIGATION,
         id=instance.id,
@@ -129,10 +130,10 @@ def from_obligation(instance: ObligationInstance, today: date) -> DashboardItem:
         status_name=status.name,
         assignee=instance.assignee,
         is_overdue=obligation_predicates.is_overdue(instance, today),
-        is_open=non_terminal,
+        is_open=is_open,
         notes=instance.notes,
         actions=_OBLIGATION_ACTIONS[status],
-        reassignable=non_terminal,
+        reassignable=is_open,
     )
 
 
