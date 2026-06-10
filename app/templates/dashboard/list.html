@@ -5,6 +5,15 @@
 
 <form method="get" class="row g-2 mb-4">
   <div class="col-md-3">
+    <label for="filter-type" class="form-label">Type</label>
+    <select id="filter-type" name="type" class="form-select form-select-sm">
+      <option value="">All</option>
+      {% for value, label in type_choices %}
+        <option value="{{ value }}" {% if current_type == value %}selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="col-md-3">
     <label for="filter-status" class="form-label">Status</label>
     <select id="filter-status" name="status" class="form-select form-select-sm">
       <option value="">All</option>
@@ -20,6 +29,15 @@
       <option value="{{ unassigned_sentinel }}" {% if current_assignee == unassigned_sentinel %}selected{% endif %}>Unassigned</option>
       {% for s in active_staff %}
         <option value="{{ s.code }}" {% if current_assignee == s.code %}selected{% endif %}>{{ s.code }} — {{ s.full_name }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="col-md-3">
+    <label for="filter-client" class="form-label">Client</label>
+    <select id="filter-client" name="client" class="form-select form-select-sm">
+      <option value="">All</option>
+      {% for cl in clients %}
+        <option value="{{ cl.id }}" {% if current_client == cl.id|string %}selected{% endif %}>{{ cl.legal_name }}</option>
       {% endfor %}
     </select>
   </div>
@@ -53,60 +71,56 @@
       </tr>
     </thead>
     <tbody>
-      {% for oi in instances %}
-        {% set overdue = is_overdue(oi, today) %}
+      {% for item in items %}
         <tr>
           <td>
-            <a href="{{ url_for('dashboard.obligation_detail', obligation_id=oi.id) }}">#{{ oi.id }}</a>
-            {% if oi.notes %}<span title="Has notes" aria-label="Has notes">📝</span>{% endif %}
+            {% if item.kind == 'obligation' %}
+              <a href="{{ url_for('dashboard.obligation_detail', obligation_id=item.id) }}">#{{ item.id }}</a>
+            {% else %}
+              #{{ item.id }}
+            {% endif %}
+            {% if item.notes %}<span title="Has notes" aria-label="Has notes">📝</span>{% endif %}
           </td>
-          <td>{{ oi.client.legal_name if oi.client else "—" }}</td>
-          <td>{{ oi.obligation_type.name }}</td>
-          <td>{{ oi.period_end }}</td>
-          <td>{{ oi.submission_due_date }}</td>
+          <td>{{ item.client.legal_name if item.client else "—" }}</td>
+          <td>{{ item.type_label }}</td>
+          <td>{{ item.period_label }}</td>
+          <td>{{ item.due_date }}</td>
           <td>
-            {% if oi.assignee %}
-              {{ oi.assignee.code }}
+            {% if item.assignee %}
+              {{ item.assignee.code }}
             {% else %}
               <span class="text-muted">Unassigned</span>
             {% endif %}
           </td>
           <td>
-            <span class="badge bg-secondary">{{ oi.status.name }}</span>
-            {% if overdue %}
+            <span class="badge bg-secondary">{{ item.status_name }}</span>
+            {% if item.is_overdue %}
               <span class="badge bg-danger ms-1">OVERDUE</span>
             {% endif %}
           </td>
           <td class="text-end">
             <div class="btn-group btn-group-sm" role="group">
-              {% if oi.status.name == "PENDING" %}
-                <form method="post" action="{{ url_for('dashboard.mark_obligation_submitted', obligation_id=oi.id, **request.args) }}" class="d-inline">
+              {% for action in item.actions %}
+                {% if item.kind == 'obligation' %}
+                  {% set action_url = url_for(obligation_action_endpoints[action.key], obligation_id=item.id, **request.args) %}
+                {% else %}
+                  {% set action_url = url_for(cipc_action_endpoints[action.key], cipc_id=item.id, **request.args) %}
+                {% endif %}
+                <form method="post" action="{{ action_url }}" class="d-inline">
                   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                  <button type="submit" class="btn btn-sm btn-outline-primary">Mark submitted</button>
+                  <button type="submit" class="btn btn-sm btn-outline-{{ action.style }}">{{ action.label }}</button>
                 </form>
-                <form method="post" action="{{ url_for('dashboard.mark_obligation_exempt', obligation_id=oi.id, **request.args) }}" class="d-inline">
-                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                  <button type="submit" class="btn btn-sm btn-outline-warning">Mark exempt</button>
-                </form>
+              {% endfor %}
+              {% if item.reassignable %}
+                {% if item.kind == 'obligation' %}
+                  {% set reassign_url = url_for('dashboard.reassign_obligation', obligation_id=item.id) %}
+                {% else %}
+                  {% set reassign_url = url_for('dashboard.reassign_cipc', cipc_id=item.id) %}
+                {% endif %}
                 <button type="button" class="btn btn-sm btn-outline-secondary"
                         data-bs-toggle="modal" data-bs-target="#reassignModal"
-                        data-obligation-id="{{ oi.id }}"
-                        data-client-name="{{ oi.client.legal_name if oi.client else '' }}">
-                  Reassign
-                </button>
-              {% elif oi.status.name == "SUBMITTED" %}
-                <form method="post" action="{{ url_for('dashboard.mark_obligation_paid', obligation_id=oi.id, **request.args) }}" class="d-inline">
-                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                  <button type="submit" class="btn btn-sm btn-outline-success">Mark paid</button>
-                </form>
-                <form method="post" action="{{ url_for('dashboard.mark_obligation_exempt', obligation_id=oi.id, **request.args) }}" class="d-inline">
-                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                  <button type="submit" class="btn btn-sm btn-outline-warning">Mark exempt</button>
-                </form>
-                <button type="button" class="btn btn-sm btn-outline-secondary"
-                        data-bs-toggle="modal" data-bs-target="#reassignModal"
-                        data-obligation-id="{{ oi.id }}"
-                        data-client-name="{{ oi.client.legal_name if oi.client else '' }}">
+                        data-reassign-url="{{ reassign_url }}"
+                        data-client-name="{{ item.client.legal_name if item.client else '' }}">
                   Reassign
                 </button>
               {% endif %}
@@ -120,9 +134,9 @@
   </table>
 </div>
 
-<!-- Single shared reassign modal — locked decision §10. The trigger button's
-     data-obligation-id is read by the JS below; the modal form's action is
-     rewritten to point at the matching obligation each time the modal opens. -->
+<!-- Single shared reassign modal — locked decision §10. The trigger button carries a
+     fully-resolved data-reassign-url (obligation or CIPC); the JS below points the modal
+     form's action at it, appending the current filter query string, each time it opens. -->
 <div class="modal fade" id="reassignModal" tabindex="-1" aria-hidden="true">
   <div class="modal-dialog">
     <form method="post" id="reassignForm">
@@ -153,10 +167,10 @@
     const queryString = window.location.search;  // preserves current filter args
     modal.addEventListener("show.bs.modal", function (event) {
       const trigger = event.relatedTarget;
-      const id = trigger.getAttribute("data-obligation-id");
+      const reassignUrl = trigger.getAttribute("data-reassign-url");
       const client = trigger.getAttribute("data-client-name");
-      form.action = "/dashboard/obligations/" + id + "/reassign" + queryString;
-      title.textContent = client ? "Reassign — " + client : "Reassign obligation";
+      form.action = reassignUrl + queryString;
+      title.textContent = client ? "Reassign — " + client : "Reassign";
     });
   })();
 </script>

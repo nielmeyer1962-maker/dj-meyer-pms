@@ -82,3 +82,31 @@ def mark_ar_submitted(instance: CIPCAnnualInstance) -> None:
 def mark_closed(instance: CIPCAnnualInstance) -> None:
     """AR_SUBMITTED → CLOSED. Raises ValueError if status is not AR_SUBMITTED."""
     _advance(instance, "mark_closed", CIPCAnnualStatus.AR_SUBMITTED, CIPCAnnualStatus.CLOSED)
+
+
+# Pre-filing states a row may be declined from. Excludes AR_SUBMITTED (the AR is already
+# filed — there is nothing to decline) and the two terminal states CLOSED / DECLINED.
+_DECLINABLE_FROM = (
+    CIPCAnnualStatus.GENERATED,
+    CIPCAnnualStatus.INVOICED,
+    CIPCAnnualStatus.INVOICE_PAID,
+    CIPCAnnualStatus.BO_SUBMITTED,
+)
+
+
+def mark_declined(instance: CIPCAnnualInstance) -> None:
+    """Any pre-filing state → DECLINED. Legal from GENERATED, INVOICED, INVOICE_PAID or
+    BO_SUBMITTED; raises ValueError from AR_SUBMITTED, CLOSED or DECLINED.
+
+    DECLINED is the terminal "service not taken up" off-ramp, kept distinct from CLOSED
+    (which means the AR was filed). Not an _advance() call because it has four legal
+    prior states rather than a single predecessor. Declining a row already at INVOICED /
+    INVOICE_PAID leaves an invoice the future billing ticket must credit-note — not
+    handled here."""
+    if instance.status not in _DECLINABLE_FROM:
+        _raise_illegal(
+            "mark_declined",
+            instance,
+            "GENERATED, INVOICED, INVOICE_PAID or BO_SUBMITTED",
+        )
+    instance.status = CIPCAnnualStatus.DECLINED

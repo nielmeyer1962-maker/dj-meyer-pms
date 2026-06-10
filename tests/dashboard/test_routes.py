@@ -6,6 +6,7 @@ from unittest.mock import patch
 import pytest
 
 from app.extensions import db
+from app.models.cipc import CIPCAnnualInstance, CIPCAnnualStatus
 from app.models.client import Client, EntityType
 from app.models.obligation import ObligationInstance, ObligationStatus, ObligationType
 from app.models.staff import Staff, StaffRole
@@ -187,6 +188,75 @@ def test_mark_exempt_from_pending_and_submitted(client, world):
     assert client.post(f"/dashboard/obligations/{s_id}/mark-exempt").status_code == 302
     assert db.session.get(ObligationInstance, p_id).status is ObligationStatus.EXEMPT
     assert db.session.get(ObligationInstance, s_id).status is ObligationStatus.EXEMPT
+
+
+# --- POST mark-in-progress / revert-to-pending (mark_in_progress feature) ---
+
+
+def test_mark_in_progress_on_pending_advances_and_redirects(client, world):
+    pending_id = world["pending_overdue_id"]
+    resp = client.post(f"/dashboard/obligations/{pending_id}/mark-in-progress")
+    assert resp.status_code == 302
+    assert resp.headers["Location"].endswith("/dashboard/")
+    oi = db.session.get(ObligationInstance, pending_id)
+    assert oi.status is ObligationStatus.IN_PROGRESS
+
+
+def test_mark_in_progress_on_submitted_flashes_no_change(client, world):
+    submitted_id = world["submitted_id"]
+    resp = client.post(
+        f"/dashboard/obligations/{submitted_id}/mark-in-progress", follow_redirects=True
+    )
+    assert resp.status_code == 200
+    assert b"cannot mark_in_progress" in resp.data
+    oi = db.session.get(ObligationInstance, submitted_id)
+    assert oi.status is ObligationStatus.SUBMITTED  # unchanged
+
+
+def test_mark_submitted_on_in_progress_advances(client, world):
+    """IN_PROGRESS is an accepted prior for mark_submitted (no detour via PENDING)."""
+    oi_id = world["pending_overdue_id"]
+    client.post(f"/dashboard/obligations/{oi_id}/mark-in-progress")
+    resp = client.post(f"/dashboard/obligations/{oi_id}/mark-submitted")
+    assert resp.status_code == 302
+    assert db.session.get(ObligationInstance, oi_id).status is ObligationStatus.SUBMITTED
+
+
+def test_revert_to_pending_on_in_progress_advances(client, world):
+    oi_id = world["pending_overdue_id"]
+    client.post(f"/dashboard/obligations/{oi_id}/mark-in-progress")
+    resp = client.post(f"/dashboard/obligations/{oi_id}/revert-to-pending")
+    assert resp.status_code == 302
+    assert db.session.get(ObligationInstance, oi_id).status is ObligationStatus.PENDING
+
+
+def test_revert_to_pending_on_pending_flashes_no_change(client, world):
+    pending_id = world["pending_overdue_id"]
+    resp = client.post(
+        f"/dashboard/obligations/{pending_id}/revert-to-pending", follow_redirects=True
+    )
+    assert resp.status_code == 200
+    assert b"cannot revert_to_pending" in resp.data
+    assert db.session.get(ObligationInstance, pending_id).status is ObligationStatus.PENDING
+
+
+def test_list_renders_start_button_on_pending_rows(client, world):
+    """PENDING rows expose the Start (mark-in-progress) action."""
+    resp = client.get("/dashboard/")
+    body = resp.data.decode()
+    pending_id = world["pending_overdue_id"]
+    assert f"/dashboard/obligations/{pending_id}/mark-in-progress" in body
+    assert ">Start<" in body
+
+
+def test_list_renders_in_progress_actions(client, world):
+    """An IN_PROGRESS row offers Mark submitted, Revert to pending and Mark exempt."""
+    oi_id = world["pending_overdue_id"]
+    client.post(f"/dashboard/obligations/{oi_id}/mark-in-progress")
+    resp = client.get("/dashboard/")
+    body = resp.data.decode()
+    assert f"/dashboard/obligations/{oi_id}/revert-to-pending" in body
+    assert "IN_PROGRESS" in body
 
 
 # --- POST reassign ---
@@ -420,3 +490,344 @@ def test_list_renders_detail_link_for_each_row(client, world):
     for key in ("pending_overdue_id", "pending_future_id", "submitted_id", "unassigned_id"):
         oi_id = world[key]
         assert f'href="/dashboard/obligations/{oi_id}"' in body
+
+
+# --- CIPC Annual Returns folded into the dashboard (chunk 5) ---
+
+
+@pytest.fixture
+def cipc_world(app):
+    """A CIPC-only world: one client + Tsego + four CIPCAnnualInstances spanning the
+    workflow and a mix of past/future due dates. Returns int IDs only (same discipline
+    as `world`). Due dates are relative to the frozen TODAY."""
+    c = Client(legal_name="Beta Holdings Pty Ltd", entity_type=EntityType.PTY_LTD)
+    db.session.add(c)
+    tsego = Staff(code="TSEGO", full_name="Tsego Mogale", role=StaffRole.SECRETARIAL)
+    db.session.add(tsego)
+    db.session.commit()
+
+    def _mk(status, due, anniversary, assignee_id=None):
+        inst = CIPCAnnualInstance(
+            client_id=c.id,
+            anniversary_date=anniversary,
+            due_date=due,
+            status=status,
+            assignee_id=assignee_id,
+        )
+        db.session.add(inst)
+        return inst
+
+    generated_overdue = _mk(
+        CIPCAnnualStatus.GENERATED, TODAY - timedelta(days=5), date(2025, 1, 10), tsego.id
+    )
+    invoiced_future = _mk(
+        CIPCAnnualStatus.INVOICED, TODAY + timedelta(days=10), date(2025, 2, 10), tsego.id
+    )
+    ar_submitted_past = _mk(
+        CIPCAnnualStatus.AR_SUBMITTED, TODAY - timedelta(days=2), date(2025, 3, 10), tsego.id
+    )
+    closed_unassigned = _mk(
+        CIPCAnnualStatus.CLOSED, TODAY + timedelta(days=20), date(2025, 4, 10), None
+    )
+    db.session.commit()
+    return {
+        "client_id": c.id,
+        "tsego_id": tsego.id,
+        "generated_overdue_id": generated_overdue.id,
+        "invoiced_future_id": invoiced_future.id,
+        "ar_submitted_past_id": ar_submitted_past.id,
+        "closed_unassigned_id": closed_unassigned.id,
+    }
+
+
+def test_list_includes_cipc_rows(client, cipc_world):
+    resp = client.get("/dashboard/")
+    assert resp.status_code == 200
+    body = resp.data.decode()
+    assert "Beta Holdings Pty Ltd" in body
+    assert "CIPC AR" in body
+    # The generated row is past-due and pre-filing → OVERDUE badge.
+    assert "OVERDUE" in body
+
+
+def test_list_renders_cipc_action_buttons(client, cipc_world):
+    """A GENERATED row exposes its forward transition plus the Service-declined off-ramp;
+    CIPC rows have no detail anchor (no detail page yet)."""
+    resp = client.get("/dashboard/")
+    body = resp.data.decode()
+    gid = cipc_world["generated_overdue_id"]
+    assert f"/dashboard/cipc/{gid}/mark-invoiced" in body
+    assert f"/dashboard/cipc/{gid}/mark-declined" in body
+    assert "Service declined" in body
+    assert f'href="/dashboard/obligations/{gid}"' not in body
+
+
+def test_mark_cipc_invoiced_advances_and_redirects(client, cipc_world):
+    gid = cipc_world["generated_overdue_id"]
+    resp = client.post(f"/dashboard/cipc/{gid}/mark-invoiced")
+    assert resp.status_code == 302
+    assert resp.headers["Location"].endswith("/dashboard/")
+    assert db.session.get(CIPCAnnualInstance, gid).status is CIPCAnnualStatus.INVOICED
+
+
+def test_mark_cipc_invoiced_illegal_flashes_no_change(client, cipc_world):
+    ar_id = cipc_world["ar_submitted_past_id"]
+    resp = client.post(f"/dashboard/cipc/{ar_id}/mark-invoiced", follow_redirects=True)
+    assert resp.status_code == 200
+    assert b"cannot mark_invoiced" in resp.data
+    assert db.session.get(CIPCAnnualInstance, ar_id).status is CIPCAnnualStatus.AR_SUBMITTED
+
+
+def test_mark_cipc_declined_from_generated(client, cipc_world):
+    gid = cipc_world["generated_overdue_id"]
+    resp = client.post(f"/dashboard/cipc/{gid}/mark-declined")
+    assert resp.status_code == 302
+    assert db.session.get(CIPCAnnualInstance, gid).status is CIPCAnnualStatus.DECLINED
+
+
+def test_mark_cipc_declined_illegal_once_filed(client, cipc_world):
+    """AR already filed: the Service-declined off-ramp is closed."""
+    ar_id = cipc_world["ar_submitted_past_id"]
+    resp = client.post(f"/dashboard/cipc/{ar_id}/mark-declined", follow_redirects=True)
+    assert resp.status_code == 200
+    assert b"cannot mark_declined" in resp.data
+    assert db.session.get(CIPCAnnualInstance, ar_id).status is CIPCAnnualStatus.AR_SUBMITTED
+
+
+def test_mark_cipc_closed_from_ar_submitted(client, cipc_world):
+    ar_id = cipc_world["ar_submitted_past_id"]
+    resp = client.post(f"/dashboard/cipc/{ar_id}/mark-closed")
+    assert resp.status_code == 302
+    assert db.session.get(CIPCAnnualInstance, ar_id).status is CIPCAnnualStatus.CLOSED
+
+
+def test_cipc_action_redirect_preserves_filters(client, cipc_world):
+    gid = cipc_world["generated_overdue_id"]
+    resp = client.post(f"/dashboard/cipc/{gid}/mark-invoiced?assignee=TSEGO&view=overdue")
+    assert resp.status_code == 302
+    loc = resp.headers["Location"]
+    assert "assignee=TSEGO" in loc
+    assert "view=overdue" in loc
+
+
+def test_cipc_reassign_to_unassigned_sets_null(client, cipc_world):
+    gid = cipc_world["generated_overdue_id"]
+    resp = client.post(f"/dashboard/cipc/{gid}/reassign", data={"assignee_id": ""})
+    assert resp.status_code == 302
+    assert db.session.get(CIPCAnnualInstance, gid).assignee_id is None
+
+
+def test_cipc_reassign_to_nonexistent_staff_400(client, cipc_world):
+    gid = cipc_world["generated_overdue_id"]
+    resp = client.post(f"/dashboard/cipc/{gid}/reassign", data={"assignee_id": "9999"})
+    assert resp.status_code == 400
+
+
+def test_status_filter_leaves_cipc_visible(client, cipc_world):
+    """The Status filter narrows obligation rows ONLY — it never includes or excludes
+    CIPC. With a CIPC row in the set, type=All & status=PENDING still returns the CIPC
+    row. Asserts on a CIPC due-date string (a row-only marker)."""
+    resp = client.get("/dashboard/?status=PENDING")
+    assert resp.status_code == 200
+    assert "2026-05-08" in resp.data.decode()  # generated_overdue due date, TODAY-5
+
+
+def test_cipc_ar_ignores_status(client, cipc_world):
+    """type=CIPC_AR shows the CIPC rows regardless of a stray Status value — never a blank
+    list. CIPC visibility is governed by the Type filter alone."""
+    resp = client.get("/dashboard/?type=CIPC_AR&status=PENDING")
+    assert resp.status_code == 200
+    body = resp.data.decode()
+    assert "2026-05-08" in body  # generated_overdue still visible
+    assert "2026-05-11" in body  # ar_submitted_past still visible
+
+
+def test_view_overdue_includes_only_overdue_cipc(client, cipc_world):
+    """view=overdue keeps the pre-filing past-due row; the past-but-filed AR_SUBMITTED row
+    and the future INVOICED row are excluded."""
+    resp = client.get("/dashboard/?view=overdue")
+    body = resp.data.decode()
+    assert "2026-05-08" in body  # generated_overdue, due TODAY-5
+    assert "2026-05-11" not in body  # ar_submitted_past (filed → not overdue)
+    assert "2026-05-23" not in body  # invoiced_future
+
+
+def test_assignee_filter_applies_to_cipc(client, cipc_world):
+    resp = client.get("/dashboard/?assignee=TSEGO")
+    body = resp.data.decode()
+    assert "2026-05-08" in body  # generated_overdue (Tsego)
+    assert "2026-06-02" not in body  # closed_unassigned (no assignee) excluded
+
+
+# --- Type filter spanning obligations + CIPC (chunk 6a) ---
+
+
+@pytest.fixture
+def mixed_world(app):
+    """One client with a VAT201 obligation, an EMP201 obligation, and a CIPC AR — each on
+    a distinct due date so a row can be identified by its date string regardless of the
+    type-dropdown option labels (which always contain VAT201/EMP201/CIPC AR)."""
+    c = Client(legal_name="Acme Pty Ltd", entity_type=EntityType.PTY_LTD)
+    db.session.add(c)
+    niel = Staff(code="NIEL", full_name="Niel Meyer", role=StaffRole.TAX)
+    db.session.add(niel)
+    db.session.commit()
+
+    vat = ObligationInstance(
+        client_id=c.id,
+        obligation_type=ObligationType.VAT201,
+        period_start=date(2026, 1, 1),
+        period_end=date(2026, 1, 31),
+        submission_due_date=date(2026, 1, 31),
+        payment_due_date=date(2026, 1, 31),
+        status=ObligationStatus.PENDING,
+        assignee_id=niel.id,
+    )
+    emp = ObligationInstance(
+        client_id=c.id,
+        obligation_type=ObligationType.EMP201,
+        period_start=date(2026, 2, 1),
+        period_end=date(2026, 2, 28),
+        submission_due_date=date(2026, 2, 28),
+        payment_due_date=date(2026, 2, 28),
+        status=ObligationStatus.PENDING,
+        assignee_id=niel.id,
+    )
+    cipc = CIPCAnnualInstance(
+        client_id=c.id,
+        anniversary_date=date(2025, 3, 15),
+        due_date=date(2026, 3, 15),
+        status=CIPCAnnualStatus.GENERATED,
+        assignee_id=niel.id,
+    )
+    db.session.add_all([vat, emp, cipc])
+    db.session.commit()
+    # Distinct date markers: VAT 2026-01-31, EMP 2026-02-28, CIPC 2026-03-15.
+    return {"vat_due": "2026-01-31", "emp_due": "2026-02-28", "cipc_due": "2026-03-15"}
+
+
+def test_type_filter_unset_shows_all_kinds(client, mixed_world):
+    body = client.get("/dashboard/").data.decode()
+    assert mixed_world["vat_due"] in body
+    assert mixed_world["emp_due"] in body
+    assert mixed_world["cipc_due"] in body
+
+
+def test_type_filter_vat201_shows_only_vat(client, mixed_world):
+    body = client.get("/dashboard/?type=VAT201").data.decode()
+    assert mixed_world["vat_due"] in body
+    assert mixed_world["emp_due"] not in body
+    assert mixed_world["cipc_due"] not in body
+
+
+def test_type_filter_emp201_shows_only_emp(client, mixed_world):
+    body = client.get("/dashboard/?type=EMP201").data.decode()
+    assert mixed_world["emp_due"] in body
+    assert mixed_world["vat_due"] not in body
+    assert mixed_world["cipc_due"] not in body
+
+
+def test_type_filter_cipc_ar_shows_only_cipc_and_excludes_obligations(client, mixed_world):
+    body = client.get("/dashboard/?type=CIPC_AR").data.decode()
+    assert mixed_world["cipc_due"] in body
+    assert mixed_world["vat_due"] not in body
+    assert mixed_world["emp_due"] not in body
+
+
+def test_type_filter_repaints_selection(client, mixed_world):
+    body = client.get("/dashboard/?type=CIPC_AR").data.decode()
+    assert '<option value="CIPC_AR" selected>CIPC AR</option>' in body
+
+
+def test_type_filter_preserved_across_action_redirect(client, world):
+    oi_id = world["pending_overdue_id"]
+    resp = client.post(f"/dashboard/obligations/{oi_id}/mark-submitted?type=VAT201")
+    assert resp.status_code == 302
+    assert "type=VAT201" in resp.headers["Location"]
+
+
+# --- Client filter spanning obligations + CIPC (chunk 6b) ---
+
+
+@pytest.fixture
+def two_client_world(app):
+    """Two clients: A with a VAT201 obligation, B with a VAT201 obligation AND a CIPC AR.
+    Rows are identified by distinct due-date strings (client legal names always appear in
+    the Client dropdown, so they aren't usable as row markers)."""
+    a = Client(legal_name="Acme Pty Ltd", entity_type=EntityType.PTY_LTD)
+    b = Client(legal_name="Beta Holdings Pty Ltd", entity_type=EntityType.PTY_LTD)
+    db.session.add_all([a, b])
+    niel = Staff(code="NIEL", full_name="Niel Meyer", role=StaffRole.TAX)
+    db.session.add(niel)
+    db.session.commit()
+
+    def _vat(client_id, period_end):
+        return ObligationInstance(
+            client_id=client_id,
+            obligation_type=ObligationType.VAT201,
+            period_start=date(period_end.year, period_end.month, 1),
+            period_end=period_end,
+            submission_due_date=period_end,
+            payment_due_date=period_end,
+            status=ObligationStatus.PENDING,
+            assignee_id=niel.id,
+        )
+
+    db.session.add_all(
+        [
+            _vat(a.id, date(2026, 1, 31)),  # A marker
+            _vat(b.id, date(2026, 2, 28)),  # B marker
+            CIPCAnnualInstance(  # B's CIPC marker
+                client_id=b.id,
+                anniversary_date=date(2025, 3, 15),
+                due_date=date(2026, 3, 15),
+                status=CIPCAnnualStatus.GENERATED,
+                assignee_id=niel.id,
+            ),
+        ]
+    )
+    db.session.commit()
+    return {
+        "a_id": a.id,
+        "b_id": b.id,
+        "a_due": "2026-01-31",
+        "b_due": "2026-02-28",
+        "b_cipc_due": "2026-03-15",
+    }
+
+
+def test_client_filter_shows_only_that_client(client, two_client_world):
+    body = client.get(f"/dashboard/?client={two_client_world['a_id']}").data.decode()
+    assert two_client_world["a_due"] in body
+    assert two_client_world["b_due"] not in body
+    assert two_client_world["b_cipc_due"] not in body
+
+
+def test_client_filter_applies_to_cipc(client, two_client_world):
+    body = client.get(f"/dashboard/?client={two_client_world['b_id']}").data.decode()
+    assert two_client_world["b_due"] in body
+    assert two_client_world["b_cipc_due"] in body  # B's CIPC row included
+    assert two_client_world["a_due"] not in body
+
+
+def test_client_filter_repaints_selection(client, two_client_world):
+    a_id = two_client_world["a_id"]
+    body = client.get(f"/dashboard/?client={a_id}").data.decode()
+    assert f'<option value="{a_id}" selected>Acme Pty Ltd</option>' in body
+
+
+def test_invalid_client_filter_is_ignored(client, two_client_world):
+    """An unknown or non-numeric client id falls through to no filter (all rows shown)."""
+    for bad in ("99999", "not-a-number"):
+        body = client.get(f"/dashboard/?client={bad}").data.decode()
+        assert two_client_world["a_due"] in body
+        assert two_client_world["b_due"] in body
+        assert two_client_world["b_cipc_due"] in body
+
+
+def test_client_filter_preserved_across_action_redirect(client, world):
+    oi_id = world["pending_overdue_id"]
+    client_id = world["client_id"]
+    resp = client.post(f"/dashboard/obligations/{oi_id}/mark-submitted?client={client_id}")
+    assert resp.status_code == 302
+    assert f"client={client_id}" in resp.headers["Location"]

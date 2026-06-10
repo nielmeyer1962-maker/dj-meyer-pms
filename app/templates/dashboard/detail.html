@@ -45,10 +45,31 @@
 
 <div class="btn-group btn-group-sm mt-2" role="group" aria-label="Obligation actions">
   {% if instance.status.name == "PENDING" %}
+    <form method="post" action="{{ url_for('dashboard.mark_obligation_in_progress', obligation_id=instance.id) }}" class="d-inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="next" value="detail">
+      <button type="submit" class="btn btn-sm btn-outline-info">Start</button>
+    </form>
     <form method="post" action="{{ url_for('dashboard.mark_obligation_submitted', obligation_id=instance.id) }}" class="d-inline">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="next" value="detail">
       <button type="submit" class="btn btn-sm btn-outline-primary">Mark submitted</button>
+    </form>
+    <form method="post" action="{{ url_for('dashboard.mark_obligation_exempt', obligation_id=instance.id) }}" class="d-inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="next" value="detail">
+      <button type="submit" class="btn btn-sm btn-outline-warning">Mark exempt</button>
+    </form>
+  {% elif instance.status.name == "IN_PROGRESS" %}
+    <form method="post" action="{{ url_for('dashboard.mark_obligation_submitted', obligation_id=instance.id) }}" class="d-inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="next" value="detail">
+      <button type="submit" class="btn btn-sm btn-outline-primary">Mark submitted</button>
+    </form>
+    <form method="post" action="{{ url_for('dashboard.revert_obligation_to_pending', obligation_id=instance.id) }}" class="d-inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="next" value="detail">
+      <button type="submit" class="btn btn-sm btn-outline-secondary">Revert to pending</button>
     </form>
     <form method="post" action="{{ url_for('dashboard.mark_obligation_exempt', obligation_id=instance.id) }}" class="d-inline">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

@@ -68,8 +68,9 @@ def test_timestamps_auto_populate(app):
         assert oi.updated_at is not None
 
 
-def test_six_states_in_declared_order(app):
-    """The workflow enum is exactly the six ordered states, BO before AR."""
+def test_states_in_declared_order(app):
+    """The six ordered workflow states (BO before AR), then DECLINED — the terminal
+    off-ramp reachable from any pre-filing state, declared last."""
     assert [s.name for s in CIPCAnnualStatus] == [
         "GENERATED",
         "INVOICED",
@@ -77,6 +78,7 @@ def test_six_states_in_declared_order(app):
         "BO_SUBMITTED",
         "AR_SUBMITTED",
         "CLOSED",
+        "DECLINED",
     ]
 
 
