@@ -18,6 +18,7 @@ from app.extensions import db
 from app.models.client import Client
 from app.models.obligation import ObligationInstance, ObligationStatus, ObligationType
 from app.services.obligations.emp201 import generate_emp201
+from app.services.obligations.itr14 import generate_itr14
 from app.services.obligations.vat201 import generate_vat201
 
 
@@ -35,12 +36,17 @@ def regenerate(client: Client, today: date | None = None) -> RegenerateResult:
     generated. SUBMITTED, PAID, EXEMPT rows are never touched.
 
     The today parameter mirrors generate_vat201(today=...) — production
-    callers leave it None; tests inject a fixed date.
+    callers leave it None; tests inject a fixed date. It is resolved once here so
+    the generators and the past-due prune guard all share a single consistent
+    notion of "today".
 
     Caller owns the commit. NotImplementedError from a Cat E generator call
     propagates; the caller's existing (ValueError, NotImplementedError)
     handler in the regenerate route catches it.
     """
+    if today is None:
+        today = date.today()
+
     existing: dict[tuple[ObligationType, date], ObligationInstance] = {
         (row.obligation_type, row.period_end): row
         for row in db.session.scalars(
@@ -52,7 +58,11 @@ def regenerate(client: Client, today: date | None = None) -> RegenerateResult:
     # obligation_type, so their period keys never collide.
     generated_by_key: dict[tuple[ObligationType, date], ObligationInstance] = {
         (inst.obligation_type, inst.period_end): inst
-        for inst in (*generate_vat201(client, today=today), *generate_emp201(client, today=today))
+        for inst in (
+            *generate_vat201(client, today=today),
+            *generate_emp201(client, today=today),
+            *generate_itr14(client, today=today),
+        )
     }
 
     added = updated = deleted = 0
@@ -74,13 +84,17 @@ def regenerate(client: Client, today: date | None = None) -> RegenerateResult:
             old_inst.payment_due_date = new_inst.payment_due_date
             updated += 1
 
-    # Prune PENDING rows whose periods are no longer generated. Terminal-state
-    # rows (SUBMITTED / PAID / EXEMPT) survive untouched per the locked rule:
-    # they preserve history even when the client's VAT config changes.
+    # Prune PENDING rows whose periods are no longer generated — but ONLY when the
+    # period is still strictly in the future (period_end > today). A PENDING row
+    # whose period_end has already come due (period_end <= today) is never deleted:
+    # it represents real, still-outstanding work and silently dropping it would
+    # lose an overdue obligation. This protects ITR14's ~12-month PENDING window
+    # and closes the same hazard for overdue VAT201/EMP201. Terminal-state rows
+    # (SUBMITTED / PAID / EXEMPT) survive untouched per the locked rule.
     for key, old_inst in existing.items():
         if key in generated_by_key:
             continue
-        if old_inst.status is ObligationStatus.PENDING:
+        if old_inst.status is ObligationStatus.PENDING and old_inst.period_end > today:
             db.session.delete(old_inst)
             deleted += 1
 
