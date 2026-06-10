@@ -189,6 +189,75 @@ def test_mark_exempt_from_pending_and_submitted(client, world):
     assert db.session.get(ObligationInstance, s_id).status is ObligationStatus.EXEMPT
 
 
+# --- POST mark-in-progress / revert-to-pending (mark_in_progress feature) ---
+
+
+def test_mark_in_progress_on_pending_advances_and_redirects(client, world):
+    pending_id = world["pending_overdue_id"]
+    resp = client.post(f"/dashboard/obligations/{pending_id}/mark-in-progress")
+    assert resp.status_code == 302
+    assert resp.headers["Location"].endswith("/dashboard/")
+    oi = db.session.get(ObligationInstance, pending_id)
+    assert oi.status is ObligationStatus.IN_PROGRESS
+
+
+def test_mark_in_progress_on_submitted_flashes_no_change(client, world):
+    submitted_id = world["submitted_id"]
+    resp = client.post(
+        f"/dashboard/obligations/{submitted_id}/mark-in-progress", follow_redirects=True
+    )
+    assert resp.status_code == 200
+    assert b"cannot mark_in_progress" in resp.data
+    oi = db.session.get(ObligationInstance, submitted_id)
+    assert oi.status is ObligationStatus.SUBMITTED  # unchanged
+
+
+def test_mark_submitted_on_in_progress_advances(client, world):
+    """IN_PROGRESS is an accepted prior for mark_submitted (no detour via PENDING)."""
+    oi_id = world["pending_overdue_id"]
+    client.post(f"/dashboard/obligations/{oi_id}/mark-in-progress")
+    resp = client.post(f"/dashboard/obligations/{oi_id}/mark-submitted")
+    assert resp.status_code == 302
+    assert db.session.get(ObligationInstance, oi_id).status is ObligationStatus.SUBMITTED
+
+
+def test_revert_to_pending_on_in_progress_advances(client, world):
+    oi_id = world["pending_overdue_id"]
+    client.post(f"/dashboard/obligations/{oi_id}/mark-in-progress")
+    resp = client.post(f"/dashboard/obligations/{oi_id}/revert-to-pending")
+    assert resp.status_code == 302
+    assert db.session.get(ObligationInstance, oi_id).status is ObligationStatus.PENDING
+
+
+def test_revert_to_pending_on_pending_flashes_no_change(client, world):
+    pending_id = world["pending_overdue_id"]
+    resp = client.post(
+        f"/dashboard/obligations/{pending_id}/revert-to-pending", follow_redirects=True
+    )
+    assert resp.status_code == 200
+    assert b"cannot revert_to_pending" in resp.data
+    assert db.session.get(ObligationInstance, pending_id).status is ObligationStatus.PENDING
+
+
+def test_list_renders_start_button_on_pending_rows(client, world):
+    """PENDING rows expose the Start (mark-in-progress) action."""
+    resp = client.get("/dashboard/")
+    body = resp.data.decode()
+    pending_id = world["pending_overdue_id"]
+    assert f"/dashboard/obligations/{pending_id}/mark-in-progress" in body
+    assert ">Start<" in body
+
+
+def test_list_renders_in_progress_actions(client, world):
+    """An IN_PROGRESS row offers Mark submitted, Revert to pending and Mark exempt."""
+    oi_id = world["pending_overdue_id"]
+    client.post(f"/dashboard/obligations/{oi_id}/mark-in-progress")
+    resp = client.get("/dashboard/")
+    body = resp.data.decode()
+    assert f"/dashboard/obligations/{oi_id}/revert-to-pending" in body
+    assert "IN_PROGRESS" in body
+
+
 # --- POST reassign ---
 
 

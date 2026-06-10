@@ -9,8 +9,10 @@ from app.models.client import Client, EntityType
 from app.models.obligation import ObligationInstance, ObligationStatus, ObligationType
 from app.services.obligations.transitions import (
     mark_exempt,
+    mark_in_progress,
     mark_paid,
     mark_submitted,
+    revert_to_pending,
 )
 
 
@@ -43,12 +45,45 @@ def _make_instance(
 # --- Legal advances ---
 
 
+def test_mark_in_progress_advances_pending_to_in_progress(app):
+    with app.app_context():
+        c = _make_client()
+        oi = _make_instance(c.id, ObligationStatus.PENDING)
+        mark_in_progress(oi)
+        assert oi.status is ObligationStatus.IN_PROGRESS
+
+
+def test_revert_to_pending_walks_in_progress_back_to_pending(app):
+    with app.app_context():
+        c = _make_client()
+        oi = _make_instance(c.id, ObligationStatus.IN_PROGRESS)
+        revert_to_pending(oi)
+        assert oi.status is ObligationStatus.PENDING
+
+
 def test_mark_submitted_advances_pending_to_submitted(app):
     with app.app_context():
         c = _make_client()
         oi = _make_instance(c.id, ObligationStatus.PENDING)
         mark_submitted(oi)
         assert oi.status is ObligationStatus.SUBMITTED
+
+
+def test_mark_submitted_advances_in_progress_to_submitted(app):
+    """IN_PROGRESS is an accepted prior state — started work submits without a detour."""
+    with app.app_context():
+        c = _make_client()
+        oi = _make_instance(c.id, ObligationStatus.IN_PROGRESS)
+        mark_submitted(oi)
+        assert oi.status is ObligationStatus.SUBMITTED
+
+
+def test_mark_exempt_from_in_progress(app):
+    with app.app_context():
+        c = _make_client()
+        oi = _make_instance(c.id, ObligationStatus.IN_PROGRESS)
+        mark_exempt(oi)
+        assert oi.status is ObligationStatus.EXEMPT
 
 
 def test_mark_paid_advances_submitted_to_paid(app):
@@ -93,7 +128,12 @@ def test_mark_submitted_illegal(app, from_status):
 
 @pytest.mark.parametrize(
     "from_status",
-    [ObligationStatus.PENDING, ObligationStatus.PAID, ObligationStatus.EXEMPT],
+    [
+        ObligationStatus.PENDING,
+        ObligationStatus.IN_PROGRESS,
+        ObligationStatus.PAID,
+        ObligationStatus.EXEMPT,
+    ],
 )
 def test_mark_paid_illegal(app, from_status):
     with app.app_context():
@@ -101,6 +141,42 @@ def test_mark_paid_illegal(app, from_status):
         oi = _make_instance(c.id, from_status)
         with pytest.raises(ValueError, match=from_status.name):
             mark_paid(oi)
+        assert oi.status is from_status
+
+
+@pytest.mark.parametrize(
+    "from_status",
+    [
+        ObligationStatus.IN_PROGRESS,
+        ObligationStatus.SUBMITTED,
+        ObligationStatus.PAID,
+        ObligationStatus.EXEMPT,
+    ],
+)
+def test_mark_in_progress_illegal(app, from_status):
+    with app.app_context():
+        c = _make_client()
+        oi = _make_instance(c.id, from_status)
+        with pytest.raises(ValueError, match=from_status.name):
+            mark_in_progress(oi)
+        assert oi.status is from_status
+
+
+@pytest.mark.parametrize(
+    "from_status",
+    [
+        ObligationStatus.PENDING,
+        ObligationStatus.SUBMITTED,
+        ObligationStatus.PAID,
+        ObligationStatus.EXEMPT,
+    ],
+)
+def test_revert_to_pending_illegal(app, from_status):
+    with app.app_context():
+        c = _make_client()
+        oi = _make_instance(c.id, from_status)
+        with pytest.raises(ValueError, match=from_status.name):
+            revert_to_pending(oi)
         assert oi.status is from_status
 
 

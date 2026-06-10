@@ -24,10 +24,38 @@ def _raise_illegal(action: str, instance: ObligationInstance, legal_from: str) -
     )
 
 
-def mark_submitted(instance: ObligationInstance) -> None:
-    """PENDING → SUBMITTED. Raises ValueError if instance.status is not PENDING."""
+def mark_in_progress(instance: ObligationInstance) -> None:
+    """PENDING → IN_PROGRESS. Raises ValueError if instance.status is not PENDING.
+
+    The "I've started this" signal. IN_PROGRESS still counts as overdue when late (it
+    is an open status, see predicates._OPEN_STATUSES) and can still advance to SUBMITTED
+    or EXEMPT, or be walked back to PENDING via revert_to_pending."""
     if instance.status is not ObligationStatus.PENDING:
-        _raise_illegal("mark_submitted", instance, ObligationStatus.PENDING.name)
+        _raise_illegal("mark_in_progress", instance, ObligationStatus.PENDING.name)
+    instance.status = ObligationStatus.IN_PROGRESS
+
+
+def revert_to_pending(instance: ObligationInstance) -> None:
+    """IN_PROGRESS → PENDING. Raises ValueError if instance.status is not IN_PROGRESS.
+
+    Undo for an accidental "Start": returns an in-progress row to the not-yet-started
+    PENDING state."""
+    if instance.status is not ObligationStatus.IN_PROGRESS:
+        _raise_illegal("revert_to_pending", instance, ObligationStatus.IN_PROGRESS.name)
+    instance.status = ObligationStatus.PENDING
+
+
+def mark_submitted(instance: ObligationInstance) -> None:
+    """PENDING or IN_PROGRESS → SUBMITTED. Raises ValueError from any other state.
+
+    IN_PROGRESS is an accepted prior state so work that was explicitly started can be
+    submitted directly without a detour back through PENDING."""
+    if instance.status not in (ObligationStatus.PENDING, ObligationStatus.IN_PROGRESS):
+        _raise_illegal(
+            "mark_submitted",
+            instance,
+            f"{ObligationStatus.PENDING.name} or {ObligationStatus.IN_PROGRESS.name}",
+        )
     instance.status = ObligationStatus.SUBMITTED
 
 
@@ -44,6 +72,7 @@ def mark_exempt(instance: ObligationInstance) -> None:
         _raise_illegal(
             "mark_exempt",
             instance,
-            f"{ObligationStatus.PENDING.name} or {ObligationStatus.SUBMITTED.name}",
+            f"{ObligationStatus.PENDING.name}, {ObligationStatus.IN_PROGRESS.name} "
+            f"or {ObligationStatus.SUBMITTED.name}",
         )
     instance.status = ObligationStatus.EXEMPT

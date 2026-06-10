@@ -13,8 +13,10 @@ from app.models.staff import Staff
 from app.services.obligations.predicates import is_overdue, overdue_filter
 from app.services.obligations.transitions import (
     mark_exempt,
+    mark_in_progress,
     mark_paid,
     mark_submitted,
+    revert_to_pending,
 )
 from app.utils.dates import today_sast
 from app.utils.staff import UNASSIGNED_SENTINEL, get_active_staff
@@ -177,6 +179,18 @@ def _apply_transition(obligation_id: int, action) -> None:
         return
     db.session.commit()
     flash(f"Obligation {instance.id} → {instance.status.name}.", "success")
+
+
+@bp.post("/obligations/<int:obligation_id>/mark-in-progress")
+def mark_obligation_in_progress(obligation_id: int):
+    _apply_transition(obligation_id, mark_in_progress)
+    return _redirect_after_action(obligation_id)
+
+
+@bp.post("/obligations/<int:obligation_id>/revert-to-pending")
+def revert_obligation_to_pending(obligation_id: int):
+    _apply_transition(obligation_id, revert_to_pending)
+    return _redirect_after_action(obligation_id)
 
 
 @bp.post("/obligations/<int:obligation_id>/mark-submitted")
