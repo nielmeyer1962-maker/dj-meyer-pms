@@ -32,9 +32,15 @@ class CIPCAnnualStatus(enum.Enum):
 
     BO_SUBMITTED precedes AR_SUBMITTED by regulatory mandate: since 15 Apr 2024 CIPC
     blocks Annual Return filing unless the Beneficial Ownership declaration is already
-    on file. The state graph is enforced only by the Chunk 4 transitions service, never
-    here (mirrors the ObligationInstance / Task convention). No terminal CANCELLED/EXEMPT
-    state in this iteration (locked decision: 6 states only)."""
+    on file. The state graph is enforced only by the transitions service, never here
+    (mirrors the ObligationInstance / Task convention).
+
+    DECLINED is a terminal off-ramp reachable from any PRE-FILING state (GENERATED,
+    INVOICED, INVOICE_PAID, BO_SUBMITTED) when the firm does not take up / complete the
+    CIPC service for that cycle. It is kept DISTINCT from CLOSED: CLOSED means the Annual
+    Return was filed, DECLINED means it never was. Declining a row already at INVOICED /
+    INVOICE_PAID leaves a raised invoice that the future billing ticket must credit-note;
+    that billing concern is out of scope here."""
 
     GENERATED = "GENERATED"
     INVOICED = "INVOICED"
@@ -42,6 +48,7 @@ class CIPCAnnualStatus(enum.Enum):
     BO_SUBMITTED = "BO_SUBMITTED"
     AR_SUBMITTED = "AR_SUBMITTED"
     CLOSED = "CLOSED"
+    DECLINED = "DECLINED"
 
 
 class CIPCAnnualInstance(db.Model):

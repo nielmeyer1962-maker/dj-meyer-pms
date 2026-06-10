@@ -9,6 +9,7 @@ from app.services.cipc.transitions import (
     mark_ar_submitted,
     mark_bo_submitted,
     mark_closed,
+    mark_declined,
     mark_invoice_paid,
     mark_invoiced,
 )
@@ -75,3 +76,41 @@ def test_bo_cannot_be_skipped_from_generated():
     inst = _instance(CIPCAnnualStatus.GENERATED)
     with pytest.raises(ValueError):
         mark_bo_submitted(inst)
+
+
+# --- mark_declined: terminal off-ramp from any pre-filing state ---
+
+_DECLINABLE = [
+    CIPCAnnualStatus.GENERATED,
+    CIPCAnnualStatus.INVOICED,
+    CIPCAnnualStatus.INVOICE_PAID,
+    CIPCAnnualStatus.BO_SUBMITTED,
+]
+_NOT_DECLINABLE = [
+    CIPCAnnualStatus.AR_SUBMITTED,
+    CIPCAnnualStatus.CLOSED,
+    CIPCAnnualStatus.DECLINED,
+]
+
+
+@pytest.mark.parametrize("from_status", _DECLINABLE)
+def test_mark_declined_from_any_pre_filing_state(from_status):
+    inst = _instance(from_status)
+    mark_declined(inst)
+    assert inst.status is CIPCAnnualStatus.DECLINED
+
+
+@pytest.mark.parametrize("from_status", _NOT_DECLINABLE)
+def test_mark_declined_illegal_once_filed_or_terminal(from_status):
+    """AR already filed, or already terminal (CLOSED/DECLINED): declining raises and the
+    state is unchanged. Covers idempotency on DECLINED itself."""
+    inst = _instance(from_status)
+    with pytest.raises(ValueError, match=from_status.name):
+        mark_declined(inst)
+    assert inst.status is from_status
+
+
+def test_declined_partitions_every_status():
+    """Guard: the declinable + non-declinable lists together cover the whole enum, so a
+    future status addition can't silently fall through untested."""
+    assert set(_DECLINABLE) | set(_NOT_DECLINABLE) == set(CIPCAnnualStatus)
