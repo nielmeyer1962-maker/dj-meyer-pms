@@ -27,6 +27,7 @@ if TYPE_CHECKING:
 class ObligationType(enum.Enum):
     VAT201 = "VAT201"
     EMP201 = "EMP201"
+    ITR14 = "ITR14"
 
     @property
     def has_payment_leg(self) -> bool:
