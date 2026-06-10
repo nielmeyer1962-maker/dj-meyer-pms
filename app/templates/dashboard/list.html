@@ -53,83 +53,42 @@
       </tr>
     </thead>
     <tbody>
-      {% for oi in instances %}
-        {% set overdue = is_overdue(oi, today) %}
+      {% for item in items %}
         <tr>
           <td>
-            <a href="{{ url_for('dashboard.obligation_detail', obligation_id=oi.id) }}">#{{ oi.id }}</a>
-            {% if oi.notes %}<span title="Has notes" aria-label="Has notes">📝</span>{% endif %}
+            <a href="{{ url_for('dashboard.obligation_detail', obligation_id=item.id) }}">#{{ item.id }}</a>
+            {% if item.notes %}<span title="Has notes" aria-label="Has notes">📝</span>{% endif %}
           </td>
-          <td>{{ oi.client.legal_name if oi.client else "—" }}</td>
-          <td>{{ oi.obligation_type.name }}</td>
-          <td>{{ oi.period_end }}</td>
-          <td>{{ oi.submission_due_date }}</td>
+          <td>{{ item.client.legal_name if item.client else "—" }}</td>
+          <td>{{ item.type_label }}</td>
+          <td>{{ item.period_label }}</td>
+          <td>{{ item.due_date }}</td>
           <td>
-            {% if oi.assignee %}
-              {{ oi.assignee.code }}
+            {% if item.assignee %}
+              {{ item.assignee.code }}
             {% else %}
               <span class="text-muted">Unassigned</span>
             {% endif %}
           </td>
           <td>
-            <span class="badge bg-secondary">{{ oi.status.name }}</span>
-            {% if overdue %}
+            <span class="badge bg-secondary">{{ item.status_name }}</span>
+            {% if item.is_overdue %}
               <span class="badge bg-danger ms-1">OVERDUE</span>
             {% endif %}
           </td>
           <td class="text-end">
             <div class="btn-group btn-group-sm" role="group">
-              {% if oi.status.name == "PENDING" %}
-                <form method="post" action="{{ url_for('dashboard.mark_obligation_in_progress', obligation_id=oi.id, **request.args) }}" class="d-inline">
+              {% for action in item.actions %}
+                <form method="post" action="{{ url_for(action_endpoints[action.key], obligation_id=item.id, **request.args) }}" class="d-inline">
                   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                  <button type="submit" class="btn btn-sm btn-outline-info">Start</button>
+                  <button type="submit" class="btn btn-sm btn-outline-{{ action.style }}">{{ action.label }}</button>
                 </form>
-                <form method="post" action="{{ url_for('dashboard.mark_obligation_submitted', obligation_id=oi.id, **request.args) }}" class="d-inline">
-                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                  <button type="submit" class="btn btn-sm btn-outline-primary">Mark submitted</button>
-                </form>
-                <form method="post" action="{{ url_for('dashboard.mark_obligation_exempt', obligation_id=oi.id, **request.args) }}" class="d-inline">
-                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                  <button type="submit" class="btn btn-sm btn-outline-warning">Mark exempt</button>
-                </form>
+              {% endfor %}
+              {% if item.reassignable %}
                 <button type="button" class="btn btn-sm btn-outline-secondary"
                         data-bs-toggle="modal" data-bs-target="#reassignModal"
-                        data-obligation-id="{{ oi.id }}"
-                        data-client-name="{{ oi.client.legal_name if oi.client else '' }}">
-                  Reassign
-                </button>
-              {% elif oi.status.name == "IN_PROGRESS" %}
-                <form method="post" action="{{ url_for('dashboard.mark_obligation_submitted', obligation_id=oi.id, **request.args) }}" class="d-inline">
-                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                  <button type="submit" class="btn btn-sm btn-outline-primary">Mark submitted</button>
-                </form>
-                <form method="post" action="{{ url_for('dashboard.revert_obligation_to_pending', obligation_id=oi.id, **request.args) }}" class="d-inline">
-                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                  <button type="submit" class="btn btn-sm btn-outline-secondary">Revert to pending</button>
-                </form>
-                <form method="post" action="{{ url_for('dashboard.mark_obligation_exempt', obligation_id=oi.id, **request.args) }}" class="d-inline">
-                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                  <button type="submit" class="btn btn-sm btn-outline-warning">Mark exempt</button>
-                </form>
-                <button type="button" class="btn btn-sm btn-outline-secondary"
-                        data-bs-toggle="modal" data-bs-target="#reassignModal"
-                        data-obligation-id="{{ oi.id }}"
-                        data-client-name="{{ oi.client.legal_name if oi.client else '' }}">
-                  Reassign
-                </button>
-              {% elif oi.status.name == "SUBMITTED" %}
-                <form method="post" action="{{ url_for('dashboard.mark_obligation_paid', obligation_id=oi.id, **request.args) }}" class="d-inline">
-                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                  <button type="submit" class="btn btn-sm btn-outline-success">Mark paid</button>
-                </form>
-                <form method="post" action="{{ url_for('dashboard.mark_obligation_exempt', obligation_id=oi.id, **request.args) }}" class="d-inline">
-                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                  <button type="submit" class="btn btn-sm btn-outline-warning">Mark exempt</button>
-                </form>
-                <button type="button" class="btn btn-sm btn-outline-secondary"
-                        data-bs-toggle="modal" data-bs-target="#reassignModal"
-                        data-obligation-id="{{ oi.id }}"
-                        data-client-name="{{ oi.client.legal_name if oi.client else '' }}">
+                        data-obligation-id="{{ item.id }}"
+                        data-client-name="{{ item.client.legal_name if item.client else '' }}">
                   Reassign
                 </button>
               {% endif %}

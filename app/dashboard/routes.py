@@ -6,6 +6,7 @@ from flask import Blueprint, abort, flash, redirect, render_template, request, u
 from sqlalchemy.orm import selectinload
 
 from app.dashboard.forms import NotesForm, ReassignForm
+from app.dashboard.items import from_obligation
 from app.extensions import db
 from app.models.client import Client
 from app.models.obligation import ObligationInstance, ObligationStatus
@@ -22,6 +23,17 @@ from app.utils.dates import today_sast
 from app.utils.staff import UNASSIGNED_SENTINEL, get_active_staff
 
 bp = Blueprint("dashboard", __name__, url_prefix="/dashboard")
+
+# Maps a DashboardItem.Action.key to the Flask endpoint that performs it. Lives here (the
+# presentation wiring) rather than in the Flask-free adapter; the list template resolves
+# each action button through it.
+_OBLIGATION_ACTION_ENDPOINTS = {
+    "mark_in_progress": "dashboard.mark_obligation_in_progress",
+    "mark_submitted": "dashboard.mark_obligation_submitted",
+    "revert_to_pending": "dashboard.revert_obligation_to_pending",
+    "mark_exempt": "dashboard.mark_obligation_exempt",
+    "mark_paid": "dashboard.mark_obligation_paid",
+}
 
 
 def _reassign_choices(active_staff: list[Staff]) -> list[tuple[str, str]]:
@@ -77,18 +89,19 @@ def list_obligations():
     elif view_arg == "overdue":
         stmt = stmt.where(overdue_filter(today))
 
-    instances = db.session.scalars(stmt).all()
+    # Map each ObligationInstance to the uniform DashboardItem the template renders. The
+    # query (filters, ordering, selectinload) is unchanged — only the row shape is.
+    items = [from_obligation(oi, today) for oi in db.session.scalars(stmt).all()]
 
     reassign_form = ReassignForm()
     reassign_form.assignee_id.choices = _reassign_choices(active_staff)
 
     return render_template(
         "dashboard/list.html",
-        instances=instances,
+        items=items,
+        action_endpoints=_OBLIGATION_ACTION_ENDPOINTS,
         active_staff=active_staff,
         unassigned_sentinel=UNASSIGNED_SENTINEL,
-        today=today,
-        is_overdue=is_overdue,
         reassign_form=reassign_form,
         # Echo current filter values so the form repaints with the user's selection.
         current_status=status_arg,
