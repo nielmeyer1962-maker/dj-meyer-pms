@@ -625,10 +625,11 @@ def test_cipc_reassign_to_nonexistent_staff_400(client, cipc_world):
 
 def test_status_filter_excludes_cipc(client, cipc_world):
     """The Status filter is an obligation-only narrowing: selecting one drops CIPC rows
-    (no CIPC row can carry an ObligationStatus)."""
+    (no CIPC row can carry an ObligationStatus). Asserts on the client name, a row-only
+    marker — the literal "CIPC AR" now always appears in the Type filter dropdown."""
     resp = client.get("/dashboard/?status=PENDING")
     assert resp.status_code == 200
-    assert "CIPC AR" not in resp.data.decode()
+    assert "Beta Holdings Pty Ltd" not in resp.data.decode()
 
 
 def test_view_overdue_includes_only_overdue_cipc(client, cipc_world):
@@ -646,3 +647,90 @@ def test_assignee_filter_applies_to_cipc(client, cipc_world):
     body = resp.data.decode()
     assert "2026-05-08" in body  # generated_overdue (Tsego)
     assert "2026-06-02" not in body  # closed_unassigned (no assignee) excluded
+
+
+# --- Type filter spanning obligations + CIPC (chunk 6a) ---
+
+
+@pytest.fixture
+def mixed_world(app):
+    """One client with a VAT201 obligation, an EMP201 obligation, and a CIPC AR — each on
+    a distinct due date so a row can be identified by its date string regardless of the
+    type-dropdown option labels (which always contain VAT201/EMP201/CIPC AR)."""
+    c = Client(legal_name="Acme Pty Ltd", entity_type=EntityType.PTY_LTD)
+    db.session.add(c)
+    niel = Staff(code="NIEL", full_name="Niel Meyer", role=StaffRole.TAX)
+    db.session.add(niel)
+    db.session.commit()
+
+    vat = ObligationInstance(
+        client_id=c.id,
+        obligation_type=ObligationType.VAT201,
+        period_start=date(2026, 1, 1),
+        period_end=date(2026, 1, 31),
+        submission_due_date=date(2026, 1, 31),
+        payment_due_date=date(2026, 1, 31),
+        status=ObligationStatus.PENDING,
+        assignee_id=niel.id,
+    )
+    emp = ObligationInstance(
+        client_id=c.id,
+        obligation_type=ObligationType.EMP201,
+        period_start=date(2026, 2, 1),
+        period_end=date(2026, 2, 28),
+        submission_due_date=date(2026, 2, 28),
+        payment_due_date=date(2026, 2, 28),
+        status=ObligationStatus.PENDING,
+        assignee_id=niel.id,
+    )
+    cipc = CIPCAnnualInstance(
+        client_id=c.id,
+        anniversary_date=date(2025, 3, 15),
+        due_date=date(2026, 3, 15),
+        status=CIPCAnnualStatus.GENERATED,
+        assignee_id=niel.id,
+    )
+    db.session.add_all([vat, emp, cipc])
+    db.session.commit()
+    # Distinct date markers: VAT 2026-01-31, EMP 2026-02-28, CIPC 2026-03-15.
+    return {"vat_due": "2026-01-31", "emp_due": "2026-02-28", "cipc_due": "2026-03-15"}
+
+
+def test_type_filter_unset_shows_all_kinds(client, mixed_world):
+    body = client.get("/dashboard/").data.decode()
+    assert mixed_world["vat_due"] in body
+    assert mixed_world["emp_due"] in body
+    assert mixed_world["cipc_due"] in body
+
+
+def test_type_filter_vat201_shows_only_vat(client, mixed_world):
+    body = client.get("/dashboard/?type=VAT201").data.decode()
+    assert mixed_world["vat_due"] in body
+    assert mixed_world["emp_due"] not in body
+    assert mixed_world["cipc_due"] not in body
+
+
+def test_type_filter_emp201_shows_only_emp(client, mixed_world):
+    body = client.get("/dashboard/?type=EMP201").data.decode()
+    assert mixed_world["emp_due"] in body
+    assert mixed_world["vat_due"] not in body
+    assert mixed_world["cipc_due"] not in body
+
+
+def test_type_filter_cipc_ar_shows_only_cipc_and_excludes_obligations(client, mixed_world):
+    body = client.get("/dashboard/?type=CIPC_AR").data.decode()
+    assert mixed_world["cipc_due"] in body
+    assert mixed_world["vat_due"] not in body
+    assert mixed_world["emp_due"] not in body
+
+
+def test_type_filter_repaints_selection(client, mixed_world):
+    body = client.get("/dashboard/?type=CIPC_AR").data.decode()
+    assert '<option value="CIPC_AR" selected>CIPC AR</option>' in body
+
+
+def test_type_filter_preserved_across_action_redirect(client, world):
+    oi_id = world["pending_overdue_id"]
+    resp = client.post(f"/dashboard/obligations/{oi_id}/mark-submitted?type=VAT201")
+    assert resp.status_code == 302
+    assert "type=VAT201" in resp.headers["Location"]

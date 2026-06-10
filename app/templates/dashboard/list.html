@@ -5,6 +5,15 @@
 
 <form method="get" class="row g-2 mb-4">
   <div class="col-md-3">
+    <label for="filter-type" class="form-label">Type</label>
+    <select id="filter-type" name="type" class="form-select form-select-sm">
+      <option value="">All</option>
+      {% for value, label in type_choices %}
+        <option value="{{ value }}" {% if current_type == value %}selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="col-md-3">
     <label for="filter-status" class="form-label">Status</label>
     <select id="filter-status" name="status" class="form-select form-select-sm">
       <option value="">All</option>

@@ -6,11 +6,11 @@ from flask import Blueprint, abort, flash, redirect, render_template, request, u
 from sqlalchemy.orm import selectinload
 
 from app.dashboard.forms import NotesForm, ReassignForm
-from app.dashboard.items import from_cipc, from_obligation
+from app.dashboard.items import CIPC_TYPE_LABEL, from_cipc, from_obligation
 from app.extensions import db
 from app.models.cipc import CIPCAnnualInstance
 from app.models.client import Client
-from app.models.obligation import ObligationInstance, ObligationStatus
+from app.models.obligation import ObligationInstance, ObligationStatus, ObligationType
 from app.models.staff import Staff
 from app.services.cipc.predicates import overdue_filter as cipc_overdue_filter
 from app.services.cipc.transitions import (
@@ -63,6 +63,10 @@ _CIPC_ACTION_ENDPOINTS = {
     "mark_declined": "dashboard.mark_cipc_declined",
 }
 
+# The Type filter spans both row kinds: the ObligationType names narrow obligations, and
+# this sentinel selects the CIPC Annual Return (which has no ObligationType).
+_CIPC_TYPE_ARG = "CIPC_AR"
+
 
 def _reassign_choices(active_staff: list[Staff]) -> list[tuple[str, str]]:
     """Modal dropdown choices: Unassigned sentinel + every active staff by code."""
@@ -80,6 +84,7 @@ def list_obligations():
     status_arg = request.args.get("status", "").upper()
     assignee_arg = request.args.get("assignee", "")
     view_arg = request.args.get("view", "")
+    type_arg = request.args.get("type", "")
 
     stmt = (
         db.select(ObligationInstance)
@@ -94,6 +99,10 @@ def list_obligations():
     # Status: stored values only. "OVERDUE" is not a valid Status choice — it lives in View.
     if status_arg in ObligationStatus.__members__:
         stmt = stmt.where(ObligationInstance.status == ObligationStatus[status_arg])
+
+    # Type: an ObligationType name narrows obligations to that type.
+    if type_arg in ObligationType.__members__:
+        stmt = stmt.where(ObligationInstance.obligation_type == ObligationType[type_arg])
 
     # Assignee: Unassigned sentinel, or an active staff code.
     if assignee_arg == UNASSIGNED_SENTINEL:
@@ -119,13 +128,18 @@ def list_obligations():
 
     # Map each ObligationInstance to the uniform DashboardItem the template renders. The
     # query (filters, ordering, selectinload) is unchanged — only the row shape is.
-    items = [from_obligation(oi, today) for oi in db.session.scalars(stmt).all()]
+    # Obligations are dropped entirely when the Type filter selects the CIPC AR.
+    if type_arg == "" or type_arg in ObligationType.__members__:
+        items = [from_obligation(oi, today) for oi in db.session.scalars(stmt).all()]
+    else:
+        items = []
 
     # Fold the CIPC Annual Returns into the same list. The Status filter is an
     # obligation-only narrowing (locked decision): when it is set, no CIPC row can carry
-    # that ObligationStatus, so CIPC is excluded entirely. Assignee + View filters apply
-    # to both, via the CIPC column equivalents (due_date, its own overdue predicate).
-    if status_arg not in ObligationStatus.__members__:
+    # that ObligationStatus, so CIPC is excluded entirely. The Type filter likewise
+    # includes CIPC only when unset or set to the CIPC AR sentinel. Assignee + View
+    # filters apply to both, via the CIPC column equivalents (due_date, overdue predicate).
+    if status_arg not in ObligationStatus.__members__ and type_arg in ("", _CIPC_TYPE_ARG):
         cipc_stmt = (
             db.select(CIPCAnnualInstance)
             .options(
@@ -175,7 +189,11 @@ def list_obligations():
         current_status=status_arg,
         current_assignee=assignee_arg,
         current_view=view_arg,
+        current_type=type_arg,
         statuses=list(ObligationStatus),
+        # Type choices span both kinds: each ObligationType, plus the CIPC AR sentinel.
+        type_choices=[(t.name, t.name) for t in ObligationType]
+        + [(_CIPC_TYPE_ARG, CIPC_TYPE_LABEL)],
     )
 
 
