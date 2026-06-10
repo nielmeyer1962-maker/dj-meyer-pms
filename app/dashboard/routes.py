@@ -85,6 +85,14 @@ def list_obligations():
     assignee_arg = request.args.get("assignee", "")
     view_arg = request.args.get("view", "")
     type_arg = request.args.get("type", "")
+    client_arg = request.args.get("client", "")
+
+    # Client dropdown lists every client; the filter narrows both row kinds to one client.
+    all_clients = db.session.scalars(db.select(Client).order_by(Client.legal_name)).all()
+    client_id_filter = next(
+        (cl.id for cl in all_clients if str(cl.id) == client_arg),
+        None,
+    )
 
     stmt = (
         db.select(ObligationInstance)
@@ -103,6 +111,10 @@ def list_obligations():
     # Type: an ObligationType name narrows obligations to that type.
     if type_arg in ObligationType.__members__:
         stmt = stmt.where(ObligationInstance.obligation_type == ObligationType[type_arg])
+
+    # Client: narrow to a single client (applies to both row kinds).
+    if client_id_filter is not None:
+        stmt = stmt.where(ObligationInstance.client_id == client_id_filter)
 
     # Assignee: Unassigned sentinel, or an active staff code.
     if assignee_arg == UNASSIGNED_SENTINEL:
@@ -148,6 +160,8 @@ def list_obligations():
             )
             .join(Client, CIPCAnnualInstance.client_id == Client.id)
         )
+        if client_id_filter is not None:
+            cipc_stmt = cipc_stmt.where(CIPCAnnualInstance.client_id == client_id_filter)
         if assignee_arg == UNASSIGNED_SENTINEL:
             cipc_stmt = cipc_stmt.where(CIPCAnnualInstance.assignee_id.is_(None))
         elif assignee_arg:
@@ -190,6 +204,8 @@ def list_obligations():
         current_assignee=assignee_arg,
         current_view=view_arg,
         current_type=type_arg,
+        current_client=client_arg,
+        clients=all_clients,
         statuses=list(ObligationStatus),
         # Type choices span both kinds: each ObligationType, plus the CIPC AR sentinel.
         type_choices=[(t.name, t.name) for t in ObligationType]

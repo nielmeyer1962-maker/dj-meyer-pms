@@ -625,11 +625,12 @@ def test_cipc_reassign_to_nonexistent_staff_400(client, cipc_world):
 
 def test_status_filter_excludes_cipc(client, cipc_world):
     """The Status filter is an obligation-only narrowing: selecting one drops CIPC rows
-    (no CIPC row can carry an ObligationStatus). Asserts on the client name, a row-only
-    marker — the literal "CIPC AR" now always appears in the Type filter dropdown."""
+    (no CIPC row can carry an ObligationStatus). Asserts on a CIPC row's due-date string —
+    a row-only marker (the "CIPC AR" label lives in the Type dropdown, the client name in
+    the Client dropdown)."""
     resp = client.get("/dashboard/?status=PENDING")
     assert resp.status_code == 200
-    assert "Beta Holdings Pty Ltd" not in resp.data.decode()
+    assert "2026-05-08" not in resp.data.decode()  # generated_overdue due date, TODAY-5
 
 
 def test_view_overdue_includes_only_overdue_cipc(client, cipc_world):
@@ -734,3 +735,90 @@ def test_type_filter_preserved_across_action_redirect(client, world):
     resp = client.post(f"/dashboard/obligations/{oi_id}/mark-submitted?type=VAT201")
     assert resp.status_code == 302
     assert "type=VAT201" in resp.headers["Location"]
+
+
+# --- Client filter spanning obligations + CIPC (chunk 6b) ---
+
+
+@pytest.fixture
+def two_client_world(app):
+    """Two clients: A with a VAT201 obligation, B with a VAT201 obligation AND a CIPC AR.
+    Rows are identified by distinct due-date strings (client legal names always appear in
+    the Client dropdown, so they aren't usable as row markers)."""
+    a = Client(legal_name="Acme Pty Ltd", entity_type=EntityType.PTY_LTD)
+    b = Client(legal_name="Beta Holdings Pty Ltd", entity_type=EntityType.PTY_LTD)
+    db.session.add_all([a, b])
+    niel = Staff(code="NIEL", full_name="Niel Meyer", role=StaffRole.TAX)
+    db.session.add(niel)
+    db.session.commit()
+
+    def _vat(client_id, period_end):
+        return ObligationInstance(
+            client_id=client_id,
+            obligation_type=ObligationType.VAT201,
+            period_start=date(period_end.year, period_end.month, 1),
+            period_end=period_end,
+            submission_due_date=period_end,
+            payment_due_date=period_end,
+            status=ObligationStatus.PENDING,
+            assignee_id=niel.id,
+        )
+
+    db.session.add_all(
+        [
+            _vat(a.id, date(2026, 1, 31)),  # A marker
+            _vat(b.id, date(2026, 2, 28)),  # B marker
+            CIPCAnnualInstance(  # B's CIPC marker
+                client_id=b.id,
+                anniversary_date=date(2025, 3, 15),
+                due_date=date(2026, 3, 15),
+                status=CIPCAnnualStatus.GENERATED,
+                assignee_id=niel.id,
+            ),
+        ]
+    )
+    db.session.commit()
+    return {
+        "a_id": a.id,
+        "b_id": b.id,
+        "a_due": "2026-01-31",
+        "b_due": "2026-02-28",
+        "b_cipc_due": "2026-03-15",
+    }
+
+
+def test_client_filter_shows_only_that_client(client, two_client_world):
+    body = client.get(f"/dashboard/?client={two_client_world['a_id']}").data.decode()
+    assert two_client_world["a_due"] in body
+    assert two_client_world["b_due"] not in body
+    assert two_client_world["b_cipc_due"] not in body
+
+
+def test_client_filter_applies_to_cipc(client, two_client_world):
+    body = client.get(f"/dashboard/?client={two_client_world['b_id']}").data.decode()
+    assert two_client_world["b_due"] in body
+    assert two_client_world["b_cipc_due"] in body  # B's CIPC row included
+    assert two_client_world["a_due"] not in body
+
+
+def test_client_filter_repaints_selection(client, two_client_world):
+    a_id = two_client_world["a_id"]
+    body = client.get(f"/dashboard/?client={a_id}").data.decode()
+    assert f'<option value="{a_id}" selected>Acme Pty Ltd</option>' in body
+
+
+def test_invalid_client_filter_is_ignored(client, two_client_world):
+    """An unknown or non-numeric client id falls through to no filter (all rows shown)."""
+    for bad in ("99999", "not-a-number"):
+        body = client.get(f"/dashboard/?client={bad}").data.decode()
+        assert two_client_world["a_due"] in body
+        assert two_client_world["b_due"] in body
+        assert two_client_world["b_cipc_due"] in body
+
+
+def test_client_filter_preserved_across_action_redirect(client, world):
+    oi_id = world["pending_overdue_id"]
+    client_id = world["client_id"]
+    resp = client.post(f"/dashboard/obligations/{oi_id}/mark-submitted?client={client_id}")
+    assert resp.status_code == 302
+    assert f"client={client_id}" in resp.headers["Location"]
