@@ -44,56 +44,24 @@
 </dl>
 
 <div class="btn-group btn-group-sm mt-2" role="group" aria-label="Obligation actions">
-  {% if instance.status.name == "PENDING" %}
-    <form method="post" action="{{ url_for('dashboard.mark_obligation_in_progress', obligation_id=instance.id) }}" class="d-inline">
+  {# Actions + reassignable come from the DashboardItem adapter (same source as the list
+     page), so a file-only obligation is terminal at SUBMITTED. Each form carries
+     next=detail so the action bounces back to this page. #}
+  {% for action in item.actions %}
+    <form method="post" action="{{ url_for(obligation_action_endpoints[action.key], obligation_id=instance.id) }}" class="d-inline">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="next" value="detail">
-      <button type="submit" class="btn btn-sm btn-outline-info">Start</button>
+      <button type="submit" class="btn btn-sm btn-outline-{{ action.style }}">{{ action.label }}</button>
     </form>
-    <form method="post" action="{{ url_for('dashboard.mark_obligation_submitted', obligation_id=instance.id) }}" class="d-inline">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  {% endfor %}
+  {% if item.reassignable %}
+    <form method="post" action="{{ url_for('dashboard.reassign_obligation', obligation_id=instance.id) }}" class="d-inline">
+      {{ reassign_form.hidden_tag() }}
       <input type="hidden" name="next" value="detail">
-      <button type="submit" class="btn btn-sm btn-outline-primary">Mark submitted</button>
-    </form>
-    <form method="post" action="{{ url_for('dashboard.mark_obligation_exempt', obligation_id=instance.id) }}" class="d-inline">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <input type="hidden" name="next" value="detail">
-      <button type="submit" class="btn btn-sm btn-outline-warning">Mark exempt</button>
-    </form>
-  {% elif instance.status.name == "IN_PROGRESS" %}
-    <form method="post" action="{{ url_for('dashboard.mark_obligation_submitted', obligation_id=instance.id) }}" class="d-inline">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <input type="hidden" name="next" value="detail">
-      <button type="submit" class="btn btn-sm btn-outline-primary">Mark submitted</button>
-    </form>
-    <form method="post" action="{{ url_for('dashboard.revert_obligation_to_pending', obligation_id=instance.id) }}" class="d-inline">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <input type="hidden" name="next" value="detail">
-      <button type="submit" class="btn btn-sm btn-outline-secondary">Revert to pending</button>
-    </form>
-    <form method="post" action="{{ url_for('dashboard.mark_obligation_exempt', obligation_id=instance.id) }}" class="d-inline">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <input type="hidden" name="next" value="detail">
-      <button type="submit" class="btn btn-sm btn-outline-warning">Mark exempt</button>
-    </form>
-  {% elif instance.status.name == "SUBMITTED" %}
-    <form method="post" action="{{ url_for('dashboard.mark_obligation_paid', obligation_id=instance.id) }}" class="d-inline">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <input type="hidden" name="next" value="detail">
-      <button type="submit" class="btn btn-sm btn-outline-success">Mark paid</button>
-    </form>
-    <form method="post" action="{{ url_for('dashboard.mark_obligation_exempt', obligation_id=instance.id) }}" class="d-inline">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <input type="hidden" name="next" value="detail">
-      <button type="submit" class="btn btn-sm btn-outline-warning">Mark exempt</button>
+      {{ reassign_form.assignee_id(class="form-select form-select-sm d-inline-block w-auto") }}
+      <button type="submit" class="btn btn-sm btn-outline-secondary">Reassign</button>
     </form>
   {% endif %}
-  <form method="post" action="{{ url_for('dashboard.reassign_obligation', obligation_id=instance.id) }}" class="d-inline">
-    {{ reassign_form.hidden_tag() }}
-    <input type="hidden" name="next" value="detail">
-    {{ reassign_form.assignee_id(class="form-select form-select-sm d-inline-block w-auto") }}
-    <button type="submit" class="btn btn-sm btn-outline-secondary">Reassign</button>
-  </form>
 </div>
 
 <hr class="my-4">

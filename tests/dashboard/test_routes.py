@@ -919,3 +919,30 @@ def test_itr14_submitted_row_is_terminal(client, itr14_world):
     body = client.get("/dashboard/").data.decode()
     for action in ("mark-paid", "mark-submitted", "mark-exempt", "mark-in-progress"):
         assert f"/dashboard/obligations/{oid}/{action}" not in body
+
+
+def test_itr14_detail_submitted_is_terminal_no_mark_paid(client, itr14_world):
+    """The DETAIL page renders actions through the adapter too: a SUBMITTED file-only
+    ITR14 offers no Mark paid (the detail-page bug) and is fully terminal — no action
+    or reassign forms."""
+    oid = itr14_world["itr14_id"]
+    client.post(f"/dashboard/obligations/{oid}/mark-submitted")
+    resp = client.get(f"/dashboard/obligations/{oid}")
+    assert resp.status_code == 200
+    body = resp.data.decode()
+    # Still renders the read-only detail (status badge), but no action forms.
+    assert "SUBMITTED" in body
+    for action in ("mark-paid", "mark-submitted", "mark-exempt", "mark-in-progress"):
+        assert f"/dashboard/obligations/{oid}/{action}" not in body
+    assert f"/dashboard/obligations/{oid}/reassign" not in body
+
+
+def test_itr14_detail_pending_offers_no_mark_paid(client, itr14_world):
+    """A PENDING file-only ITR14 detail page offers Start / Mark submitted / Mark exempt
+    (with next=detail) but never Mark paid."""
+    oid = itr14_world["itr14_id"]
+    body = client.get(f"/dashboard/obligations/{oid}").data.decode()
+    assert f"/dashboard/obligations/{oid}/mark-in-progress" in body
+    assert f"/dashboard/obligations/{oid}/mark-submitted" in body
+    assert f"/dashboard/obligations/{oid}/mark-exempt" in body
+    assert f"/dashboard/obligations/{oid}/mark-paid" not in body
