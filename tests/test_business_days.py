@@ -73,6 +73,29 @@ def test_shift_sunday_2026_01_25_to_friday():
     assert business_days.shift_to_prior_business_day(date(2026, 1, 25)) == date(2026, 1, 23)
 
 
+# --- shift_to_next_business_day ---
+
+
+def test_shift_next_saturday_2026_05_30_to_monday():
+    """30 May 2026 is Sat → 31 May Sun → Mon 1 Jun (a business day)."""
+    assert business_days.shift_to_next_business_day(date(2026, 5, 30)) == date(2026, 6, 1)
+
+
+def test_shift_next_sunday_2026_05_31_to_monday():
+    """31 May 2026 is Sun → Mon 1 Jun."""
+    assert business_days.shift_to_next_business_day(date(2026, 5, 31)) == date(2026, 6, 1)
+
+
+def test_shift_next_freedom_day_2026_to_tuesday():
+    """27 Apr 2026 (Mon) is Freedom Day → Tue 28 Apr (next business day)."""
+    assert business_days.shift_to_next_business_day(date(2026, 4, 27)) == date(2026, 4, 28)
+
+
+def test_shift_next_plain_business_day_unchanged():
+    """26 May 2026 is a normal Tuesday → returned unchanged."""
+    assert business_days.shift_to_next_business_day(date(2026, 5, 26)) == date(2026, 5, 26)
+
+
 # --- Holiday cache ---
 
 

@@ -163,6 +163,53 @@ def test_obligation_is_open_is_negation_of_is_done(status):
     assert item.reassignable is (not oi.is_done)
 
 
+# --- Obligation mapper: file-only types are terminal at SUBMITTED (Ticket 4a) ---
+
+
+@pytest.mark.parametrize(
+    "status,expected_keys,expected_open",
+    [
+        (
+            ObligationStatus.PENDING,
+            ["mark_in_progress", "mark_submitted", "mark_exempt"],
+            True,
+        ),
+        (
+            ObligationStatus.IN_PROGRESS,
+            ["mark_submitted", "revert_to_pending", "mark_exempt"],
+            True,
+        ),
+        # File-only (ITR14) is done at SUBMITTED → terminal: no actions, not open.
+        (ObligationStatus.SUBMITTED, [], False),
+        (ObligationStatus.EXEMPT, [], False),
+    ],
+)
+def test_file_only_obligation_actions_and_open_per_status(status, expected_keys, expected_open):
+    oi = _obligation(status)
+    oi.obligation_type = ObligationType.ITR14  # has_payment_leg is False
+    item = from_obligation(oi, TODAY)
+    assert _keys(item) == expected_keys
+    assert item.is_open is expected_open
+    assert item.reassignable is expected_open
+
+
+def test_file_only_never_offers_mark_paid_in_any_status():
+    """A file-only obligation must never expose the payment-leg-only 'mark_paid' action,
+    in any status — the action set is gated on is_done, not hardcoded per type."""
+    for status in ObligationStatus:
+        oi = _obligation(status)
+        oi.obligation_type = ObligationType.ITR14
+        assert "mark_paid" not in _keys(from_obligation(oi, TODAY))
+
+
+def test_payment_leg_submitted_still_offers_mark_paid():
+    """Contrast with the file-only case: a payment-leg type (VAT201) at SUBMITTED is NOT
+    done, so it keeps Mark paid. The fix is keyed on is_done, not a blanket removal."""
+    item = from_obligation(_obligation(ObligationStatus.SUBMITTED), TODAY)
+    assert _keys(item) == ["mark_paid", "mark_exempt"]
+    assert item.is_open is True
+
+
 # --- CIPC mapper: field bridging ---
 
 

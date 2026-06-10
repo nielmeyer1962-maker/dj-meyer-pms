@@ -76,3 +76,22 @@ def shift_to_prior_business_day(d: date) -> date:
         f"shift_to_prior_business_day exceeded 14 iterations starting from "
         f"{original.isoformat()} (now at {d.isoformat()}); check holiday data."
     )
+
+
+def shift_to_next_business_day(d: date) -> date:
+    """Walk forwards day-by-day until d is a business day.
+
+    Returns d unchanged if it is already a business day; otherwise rolls FORWARD
+    to the next business day. Mirror of shift_to_prior_business_day (used where a
+    deadline that lands on a weekend/SA public holiday moves to the next working
+    day rather than the prior one). Bounded at 14 iterations defensively.
+    """
+    original = d
+    for _ in range(14):
+        if is_business_day(d):
+            return d
+        d += timedelta(days=1)
+    raise RuntimeError(
+        f"shift_to_next_business_day exceeded 14 iterations starting from "
+        f"{original.isoformat()} (now at {d.isoformat()}); check holiday data."
+    )

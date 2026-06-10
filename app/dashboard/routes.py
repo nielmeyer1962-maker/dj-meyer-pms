@@ -224,13 +224,20 @@ def obligation_detail(obligation_id: int):
             selectinload(ObligationInstance.assignee),
         ],
     )
+    today = today_sast()
     active_staff = get_active_staff()
     reassign_form = ReassignForm(assignee_id=str(instance.assignee_id or ""))
     reassign_form.assignee_id.choices = _reassign_choices(active_staff)
     return render_template(
         "dashboard/detail.html",
         instance=instance,
-        today=today_sast(),
+        # The action set + reassignable gating render through the same DashboardItem
+        # adapter as the list page, so file-only types (ITR14) are terminal at SUBMITTED
+        # instead of being offered "Mark paid". Display fields stay on `instance` because
+        # the detail page shows period_start / payment_due_date, which the item omits.
+        item=from_obligation(instance, today),
+        obligation_action_endpoints=_OBLIGATION_ACTION_ENDPOINTS,
+        today=today,
         is_overdue=is_overdue,
         notes_form=NotesForm(notes=instance.notes),
         reassign_form=reassign_form,
@@ -250,13 +257,16 @@ def update_obligation_notes(obligation_id: int):
     form = NotesForm()
     if not form.validate_on_submit():
         # Re-render so the user keeps their typed text + sees inline errors.
+        today = today_sast()
         active_staff = get_active_staff()
         reassign_form = ReassignForm(assignee_id=str(instance.assignee_id or ""))
         reassign_form.assignee_id.choices = _reassign_choices(active_staff)
         return render_template(
             "dashboard/detail.html",
             instance=instance,
-            today=today_sast(),
+            item=from_obligation(instance, today),
+            obligation_action_endpoints=_OBLIGATION_ACTION_ENDPOINTS,
+            today=today,
             is_overdue=is_overdue,
             notes_form=form,
             reassign_form=reassign_form,
