@@ -30,6 +30,16 @@ def get_setting_int(key: str) -> int:
     return int(get_setting(key))
 
 
+def set_setting(key: str, value: str) -> None:
+    """Upsert a setting: update the row if the key exists, else insert it. The caller owns
+    the commit."""
+    row = db.session.scalar(db.select(AppSetting).where(AppSetting.key == key))
+    if row is None:
+        db.session.add(AppSetting(key=key, value=value))
+    else:
+        row.value = value
+
+
 def get_itr12_deadline(provisional: bool) -> DeadlineDM:
     """The ITR12 filing deadline as a validated day+month, chosen by whether the individual
     is registered for provisional tax (client.has_provisional_tax). Provisional → January,

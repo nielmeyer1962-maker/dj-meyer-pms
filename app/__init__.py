@@ -16,11 +16,13 @@ def create_app(config: type = Config) -> Flask:
     from app.clients.routes import bp as clients_bp
     from app.dashboard.routes import bp as dashboard_bp
     from app.models import app_setting, cipc, cipc_ar_fee, obligation, staff  # noqa: F401
+    from app.settings.routes import bp as settings_bp
     from app.tasks.routes import bp as tasks_bp
 
     app.register_blueprint(clients_bp)
     app.register_blueprint(dashboard_bp)
     app.register_blueprint(tasks_bp)
+    app.register_blueprint(settings_bp)
 
     @app.get("/")
     def index() -> tuple[str, int]:
