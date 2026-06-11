@@ -284,3 +284,25 @@ def test_cipc_decline_offered_exactly_on_pre_filing_states():
         CIPCAnnualStatus.INVOICE_PAID,
         CIPCAnnualStatus.BO_SUBMITTED,
     }
+
+
+# --- ITR12 confirmation: file-only wiring covers it with no adapter change (Ticket 4b) ---
+
+
+def test_itr12_is_terminal_at_submitted_via_adapter():
+    """ITR12 is file-only, so the data-driven is_done gating makes SUBMITTED terminal —
+    no actions, not open, never 'mark_paid'. No adapter change was needed for IT12."""
+    oi = _obligation(ObligationStatus.SUBMITTED)
+    oi.obligation_type = ObligationType.ITR12
+    item = from_obligation(oi, TODAY)
+    assert item.actions == ()
+    assert item.is_open is False
+    assert "mark_paid" not in _keys(item)
+
+
+def test_itr12_pending_offers_no_mark_paid_via_adapter():
+    oi = _obligation(ObligationStatus.PENDING)
+    oi.obligation_type = ObligationType.ITR12
+    item = from_obligation(oi, TODAY)
+    assert _keys(item) == ["mark_in_progress", "mark_submitted", "mark_exempt"]
+    assert "mark_paid" not in _keys(item)

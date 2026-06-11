@@ -946,3 +946,77 @@ def test_itr14_detail_pending_offers_no_mark_paid(client, itr14_world):
     assert f"/dashboard/obligations/{oid}/mark-submitted" in body
     assert f"/dashboard/obligations/{oid}/mark-exempt" in body
     assert f"/dashboard/obligations/{oid}/mark-paid" not in body
+
+
+# --- ITR12 confirmation: enum-driven Type filter + adapter detail (Ticket 4b) ---
+
+
+@pytest.fixture
+def itr12_world(app):
+    """An individual with one PENDING ITR12, plus a company CIPC AR so the type=ITR12
+    filter's CIPC exclusion can be asserted. Distinct due-date markers."""
+    person = Client(legal_name="Smit, J", entity_type=EntityType.INDIVIDUAL)
+    company = Client(legal_name="Beta Holdings Pty Ltd", entity_type=EntityType.PTY_LTD)
+    db.session.add_all([person, company])
+    niel = Staff(code="NIEL", full_name="Niel Meyer", role=StaffRole.TAX)
+    db.session.add(niel)
+    db.session.commit()
+
+    it12 = ObligationInstance(
+        client_id=person.id,
+        obligation_type=ObligationType.ITR12,
+        period_start=date(2025, 3, 1),
+        period_end=date(2026, 2, 28),
+        submission_due_date=date(2026, 10, 23),
+        payment_due_date=date(2026, 10, 23),
+        status=ObligationStatus.PENDING,
+        assignee_id=niel.id,
+    )
+    cipc = CIPCAnnualInstance(
+        client_id=company.id,
+        anniversary_date=date(2025, 3, 15),
+        due_date=date(2026, 3, 15),
+        status=CIPCAnnualStatus.GENERATED,
+        assignee_id=niel.id,
+    )
+    db.session.add_all([it12, cipc])
+    db.session.commit()
+    return {"it12_id": it12.id, "it12_due": "2026-10-23", "cipc_due": "2026-03-15"}
+
+
+def test_itr12_renders_in_list(client, itr12_world):
+    body = client.get("/dashboard/").data.decode()
+    assert "Smit, J" in body
+    assert itr12_world["it12_due"] in body
+
+
+def test_type_filter_itr12_shows_only_itr12_and_excludes_cipc(client, itr12_world):
+    """ITR12 appears in the Type filter (enum-driven) and narrows to ITR12, dropping CIPC."""
+    body = client.get("/dashboard/?type=ITR12").data.decode()
+    assert itr12_world["it12_due"] in body
+    assert itr12_world["cipc_due"] not in body
+
+
+def test_type_filter_includes_itr12_option(client, itr12_world):
+    body = client.get("/dashboard/?type=ITR12").data.decode()
+    assert '<option value="ITR12" selected>ITR12</option>' in body
+
+
+def test_itr12_detail_renders_via_adapter_pending(client, itr12_world):
+    """The detail page renders ITR12 through the adapter: Start / Mark submitted / Mark
+    exempt, and never Mark paid (file-only)."""
+    oid = itr12_world["it12_id"]
+    body = client.get(f"/dashboard/obligations/{oid}").data.decode()
+    assert "ITR12" in body
+    assert f"/dashboard/obligations/{oid}/mark-submitted" in body
+    assert f"/dashboard/obligations/{oid}/mark-paid" not in body
+
+
+def test_itr12_detail_submitted_is_terminal(client, itr12_world):
+    """A SUBMITTED ITR12 detail page is terminal — no action forms at all."""
+    oid = itr12_world["it12_id"]
+    client.post(f"/dashboard/obligations/{oid}/mark-submitted")
+    assert db.session.get(ObligationInstance, oid).status is ObligationStatus.SUBMITTED
+    body = client.get(f"/dashboard/obligations/{oid}").data.decode()
+    for action in ("mark-paid", "mark-submitted", "mark-exempt", "mark-in-progress"):
+        assert f"/dashboard/obligations/{oid}/{action}" not in body
