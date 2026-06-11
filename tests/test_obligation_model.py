@@ -208,6 +208,27 @@ def test_vat201_has_payment_leg():
     assert ObligationType.VAT201.has_payment_leg is True
 
 
+def test_itr12_is_file_only():
+    """ITR12 (individual income-tax return) is file-only — like ITR14, it is absent from
+    _PAYMENT_LEG_TYPES, so has_payment_leg is False and it is done at SUBMITTED."""
+    assert ObligationType.ITR12.value not in _PAYMENT_LEG_TYPES
+    assert ObligationType.ITR12.has_payment_leg is False
+
+
+def test_itr12_is_done_at_submitted():
+    """A file-only ITR12 is finished once SUBMITTED (no payment leg); EXEMPT is also done,
+    PENDING/IN_PROGRESS are not. is_done is a pure property, so no DB is needed."""
+    oi = ObligationInstance(obligation_type=ObligationType.ITR12)
+    for status, expected in (
+        (ObligationStatus.PENDING, False),
+        (ObligationStatus.IN_PROGRESS, False),
+        (ObligationStatus.SUBMITTED, True),
+        (ObligationStatus.EXEMPT, True),
+    ):
+        oi.status = status
+        assert oi.is_done is expected
+
+
 def test_payment_leg_map_covers_future_types():
     """EMP201 and IRP6 are not yet ObligationType members, but the payment-leg map
     must already cover them so is_done is correct the moment they are added."""

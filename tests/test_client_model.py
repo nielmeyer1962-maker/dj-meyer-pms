@@ -19,6 +19,19 @@ def test_client_defaults(app):
         assert c.created_at is not None
 
 
+def test_client_known_as_defaults_none_and_persists(app):
+    """known_as is an optional short alias: defaults to None, round-trips when set."""
+    with app.app_context():
+        c = Client(legal_name="Smit, J", entity_type=EntityType.INDIVIDUAL)
+        db.session.add(c)
+        db.session.commit()
+        assert c.known_as is None
+
+        c.known_as = "Johan (Benoni)"
+        db.session.commit()
+        assert db.session.get(Client, c.id).known_as == "Johan (Benoni)"
+
+
 def test_client_archive(app):
     with app.app_context():
         c = Client(legal_name="Old Corp", entity_type=EntityType.CC)
