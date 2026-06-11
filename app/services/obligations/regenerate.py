@@ -18,6 +18,7 @@ from app.extensions import db
 from app.models.client import Client
 from app.models.obligation import ObligationInstance, ObligationStatus, ObligationType
 from app.services.obligations.emp201 import generate_emp201
+from app.services.obligations.it12 import generate_it12
 from app.services.obligations.itr14 import generate_itr14
 from app.services.obligations.vat201 import generate_vat201
 
@@ -62,6 +63,7 @@ def regenerate(client: Client, today: date | None = None) -> RegenerateResult:
             *generate_vat201(client, today=today),
             *generate_emp201(client, today=today),
             *generate_itr14(client, today=today),
+            *generate_it12(client, today=today),
         )
     }
 
