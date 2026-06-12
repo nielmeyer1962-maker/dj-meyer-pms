@@ -25,6 +25,7 @@ from app.utils.business_days import (
     last_business_day_of_month,
     shift_to_prior_business_day,
 )
+from app.utils.dates import today_sast
 
 # Months whose last day is a period end, per category.
 # A: bi-monthly with odd-end months. B: bi-monthly with even-end months.
@@ -132,7 +133,7 @@ def generate_vat201(
         raise NotImplementedError("Category E pending domain confirmation")
 
     if today is None:
-        today = date.today()
+        today = today_sast()
 
     method = client.vat_submission_method
     instances: list[ObligationInstance] = []

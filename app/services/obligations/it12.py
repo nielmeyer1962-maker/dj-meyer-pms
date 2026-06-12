@@ -27,6 +27,7 @@ from app.models.client import Client, EntityType
 from app.models.obligation import ObligationInstance, ObligationStatus, ObligationType
 from app.services.settings import get_itr12_deadline
 from app.utils.business_days import shift_to_next_business_day
+from app.utils.dates import today_sast
 
 
 def _end_of_february(year: int) -> date:
@@ -66,7 +67,7 @@ def generate_it12(
         return []
 
     if today is None:
-        today = date.today()
+        today = today_sast()
 
     # period_end = end-Feb of the latest YoA that has closed. This year's end-Feb counts
     # only once it has arrived (<= today, so 1 March selects the just-closed YoA); before

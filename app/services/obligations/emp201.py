@@ -27,6 +27,7 @@ from datetime import date
 from app.models.client import Client
 from app.models.obligation import ObligationInstance, ObligationStatus, ObligationType
 from app.utils.business_days import shift_to_prior_business_day
+from app.utils.dates import today_sast
 
 
 def _first_of_month(d: date, delta_months: int) -> date:
@@ -96,7 +97,7 @@ def generate_emp201(
         return []
 
     if today is None:
-        today = date.today()
+        today = today_sast()
 
     instances: list[ObligationInstance] = []
     for period_end in _period_ends_in_window(today, months_ahead):
