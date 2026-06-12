@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
-from sqlalchemy import ColumnElement, and_
+from sqlalchemy import ColumnElement, and_, or_
 
 from app.models.cipc import CIPCAnnualInstance, CIPCAnnualStatus
 
@@ -51,4 +51,18 @@ def overdue_filter(today: date) -> ColumnElement[bool]:
     return and_(
         CIPCAnnualInstance.status.in_(_OVERDUE_OPEN_STATUSES),
         CIPCAnnualInstance.due_date < today,
+    )
+
+
+def due_window_filter(today: date, days: int) -> ColumnElement[bool]:
+    """CIPC equivalent of obligations.due_window_filter: overdue OR due within the next
+    `days` days inclusive. Mirrors the obligation version exactly, against due_date and
+    the CIPC overdue predicate, so the two row sources window identically."""
+    horizon = today + timedelta(days=days)
+    return or_(
+        overdue_filter(today),
+        and_(
+            CIPCAnnualInstance.due_date >= today,
+            CIPCAnnualInstance.due_date <= horizon,
+        ),
     )

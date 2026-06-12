@@ -42,12 +42,11 @@
     </select>
   </div>
   <div class="col-md-3">
-    <label for="filter-view" class="form-label">View</label>
-    <select id="filter-view" name="view" class="form-select form-select-sm">
-      <option value="" {% if not current_view %}selected{% endif %}>All</option>
-      <option value="this_week" {% if current_view == 'this_week' %}selected{% endif %}>Due this week</option>
-      <option value="next_30" {% if current_view == 'next_30' %}selected{% endif %}>Due next 30 days</option>
-      <option value="overdue" {% if current_view == 'overdue' %}selected{% endif %}>Overdue</option>
+    <label for="filter-window" class="form-label">Window</label>
+    <select id="filter-window" name="window" class="form-select form-select-sm">
+      {% for value, label in window_choices %}
+        <option value="{{ value }}" {% if current_window == value %}selected{% endif %}>{{ label }}</option>
+      {% endfor %}
     </select>
   </div>
   <div class="col-md-3 d-flex align-items-end">
@@ -55,6 +54,11 @@
     <a href="{{ url_for('dashboard.list_obligations') }}" class="btn btn-sm btn-outline-secondary ms-2">Reset</a>
   </div>
 </form>
+
+<p class="text-muted small mb-3">
+  Showing <strong>{{ total_count }}</strong> in window ·
+  <span class="text-danger">{{ overdue_count }} overdue</span>
+</p>
 
 <div class="table-responsive">
   <table class="table table-sm align-middle">
