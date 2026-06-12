@@ -126,6 +126,8 @@ def generate_vat201(
     The today parameter exists solely for test determinism. In production, leave
     it as None and the function uses date.today().
     """
+    if not client.active:
+        return []
     if not client.has_vat or client.vat_category is None or client.vat_submission_method is None:
         return []
 

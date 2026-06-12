@@ -67,6 +67,8 @@ def generate_itr14(
     The today parameter exists solely for test determinism. In production, leave
     it as None and the function uses date.today().
     """
+    if not client.active:
+        return []
     if not client.has_income_tax:
         return []
     if client.entity_type not in _ITR14_ENTITY_TYPES:

@@ -61,6 +61,8 @@ def generate_it12(
 
     The today parameter exists solely for test determinism; production leaves it None.
     """
+    if not client.active:
+        return []
     if not client.has_income_tax:
         return []
     if client.entity_type is not EntityType.INDIVIDUAL:
