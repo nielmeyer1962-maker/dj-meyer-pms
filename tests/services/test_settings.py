@@ -43,3 +43,14 @@ def test_get_itr12_deadline_provisional(app):
     with app.app_context():
         _seed(app)
         assert get_itr12_deadline(provisional=True) == DeadlineDM(day=20, month=1)
+
+
+def test_get_itr12_deadline_falls_back_to_defaults_when_keys_missing(app):
+    """With the seed rows deleted, the reader returns the DEFAULT_ITR12_* values rather
+    than raising KeyError — so regenerate can never 500 on an unseeded DB."""
+    with app.app_context():
+        _seed(app)
+        db.session.query(AppSetting).delete()
+        db.session.commit()
+        assert get_itr12_deadline(provisional=False) == DeadlineDM(day=23, month=10)
+        assert get_itr12_deadline(provisional=True) == DeadlineDM(day=20, month=1)

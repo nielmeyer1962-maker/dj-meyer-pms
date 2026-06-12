@@ -87,8 +87,10 @@ def list_obligations():
     type_arg = request.args.get("type", "")
     client_arg = request.args.get("client", "")
 
-    # Client dropdown lists every client; the filter narrows both row kinds to one client.
-    all_clients = db.session.scalars(db.select(Client).order_by(Client.legal_name)).all()
+    # Client dropdown lists active clients only; the filter narrows both row kinds to one.
+    all_clients = db.session.scalars(
+        db.select(Client).where(Client.active.is_(True)).order_by(Client.legal_name)
+    ).all()
     client_id_filter = next(
         (cl.id for cl in all_clients if str(cl.id) == client_arg),
         None,
@@ -101,6 +103,7 @@ def list_obligations():
             selectinload(ObligationInstance.assignee),
         )
         .join(Client, ObligationInstance.client_id == Client.id)
+        .where(Client.active.is_(True))
         .order_by(ObligationInstance.submission_due_date.asc(), Client.legal_name.asc())
     )
 
@@ -160,6 +163,7 @@ def list_obligations():
                 selectinload(CIPCAnnualInstance.assignee),
             )
             .join(Client, CIPCAnnualInstance.client_id == Client.id)
+            .where(Client.active.is_(True))
         )
         if client_id_filter is not None:
             cipc_stmt = cipc_stmt.where(CIPCAnnualInstance.client_id == client_id_filter)

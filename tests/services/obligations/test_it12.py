@@ -160,6 +160,19 @@ def test_provisional_due_rolls_forward_off_weekend(app):
 # --- build invariants ---
 
 
+def test_generator_uses_default_deadlines_when_settings_unseeded(app):
+    """With no AppSetting rows present, the generator still produces the seeded-default
+    deadlines (23 Oct non-prov / 20 Jan prov) via get_itr12_deadline's fallback."""
+    with app.app_context():
+        nonprov = generate_it12(_make_individual(provisional=False), today=date(2026, 6, 11))[0]
+        assert nonprov.submission_due_date == date(2026, 10, 23)
+
+        prov = generate_it12(
+            _make_individual(provisional=True, legal_name="Prov, P"), today=date(2026, 6, 11)
+        )[0]
+        assert prov.submission_due_date == date(2027, 1, 20)
+
+
 def test_build_invariants(app):
     """File-only: payment_due_date == submission_due_date, status PENDING, type ITR12,
     client_id wired through."""

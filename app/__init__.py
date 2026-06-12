@@ -1,12 +1,13 @@
 from flask import Flask
 
-from app.config import Config
+from app.config import Config, validate_secret_key
 from app.extensions import csrf, db, migrate
 
 
 def create_app(config: type = Config) -> Flask:
     app = Flask(__name__)
     app.config.from_object(config)
+    validate_secret_key(app)
 
     db.init_app(app)
     migrate.init_app(app, db)

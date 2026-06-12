@@ -502,3 +502,38 @@ def test_regenerate_skips_it12_for_non_individual(app):
 
         rows = _all_for_client(c.id)
         assert not any(r.obligation_type is ObligationType.ITR12 for r in rows)
+
+
+# --- Archived client is inert (H1 chunk 2) ---
+
+
+def test_regenerate_on_archived_client_prunes_future_pending(app):
+    """Once a client is archived, its generators yield nothing, so regenerate adds 0 and
+    prunes its still-future PENDING rows by the existing rule — while terminal rows are
+    preserved as always."""
+    with app.app_context():
+        c = _make_client()  # active VAT Cat C client
+        regenerate(c, today=date(2026, 1, 1))
+        db.session.commit()
+        pendings = _pending_by_period_end(c.id)
+        assert len(pendings) == 12
+
+        # Mark one row SUBMITTED so we can confirm terminal rows survive the archive.
+        keep = pendings[date(2026, 6, 30)]
+        keep.status = ObligationStatus.SUBMITTED
+        db.session.commit()
+        keep_id = keep.id
+
+        c.active = False
+        db.session.commit()
+
+        result = regenerate(c, today=date(2026, 1, 1))
+        db.session.commit()
+
+        # Nothing generated; the 11 remaining future PENDING rows are pruned.
+        assert result.added == 0
+        assert result.deleted == 11
+        # Terminal row preserved; no PENDING rows remain.
+        kept = db.session.get(ObligationInstance, keep_id)
+        assert kept is not None and kept.status is ObligationStatus.SUBMITTED
+        assert _pending_by_period_end(c.id) == {}
