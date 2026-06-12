@@ -37,6 +37,13 @@ def app():
     with application.app_context():
         _db.create_all()
         yield application
+        # Drop the scoped session before drop_all. The fixture holds one app context open
+        # across the whole test, so a request made via the test client reuses it and
+        # Flask-SQLAlchemy's teardown_appcontext never fires — leaving the session's
+        # connection idle-in-transaction. On Postgres that open transaction holds a lock
+        # that blocks DROP TABLE indefinitely; SQLite never enforced it. Removing the
+        # session here rolls it back and frees the connection before teardown.
+        _db.session.remove()
         _db.drop_all()
 
 
