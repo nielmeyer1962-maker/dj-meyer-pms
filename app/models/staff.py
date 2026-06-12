@@ -3,8 +3,10 @@ from __future__ import annotations
 import enum
 from datetime import datetime
 
+from flask_login import UserMixin
 from sqlalchemy import Boolean, DateTime, Enum, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column, validates
+from werkzeug.security import check_password_hash, generate_password_hash
 
 from app.extensions import db
 
@@ -15,7 +17,7 @@ class StaffRole(enum.Enum):
     BOTH = "BOTH"
 
 
-class Staff(db.Model):
+class Staff(UserMixin, db.Model):
     __tablename__ = "staff"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -53,6 +55,24 @@ class Staff(db.Model):
         if not value or not value.strip():
             raise ValueError("full_name is required and cannot be blank")
         return value
+
+    # --- Flask-Login / auth ---
+
+    @property
+    def is_active(self) -> bool:
+        """Flask-Login reads this; tie it to the soft-delete flag so an archived staff
+        member can't hold a valid session login. (UserMixin's default is always True.)"""
+        return self.active
+
+    def set_password(self, raw_password: str) -> None:
+        """Hash and store a password (werkzeug). The raw password is never persisted."""
+        self.password_hash = generate_password_hash(raw_password)
+
+    def check_password(self, raw_password: str) -> bool:
+        """True only if a hash is set AND it matches. A hashless staff can't log in."""
+        if not self.password_hash:
+            return False
+        return check_password_hash(self.password_hash, raw_password)
 
     def __repr__(self) -> str:
         return f"<Staff {self.code} {self.full_name!r} role={self.role.name}>"
