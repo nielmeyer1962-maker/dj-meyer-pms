@@ -1,7 +1,22 @@
-from flask import Flask
+from flask import Flask, render_template
 
 from app.config import Config, validate_secret_key
 from app.extensions import csrf, db, migrate
+
+
+def _register_error_handlers(app: Flask) -> None:
+    """Friendly 404/500 pages. The 500 handler rolls the session back (so a poisoned
+    transaction doesn't bleed into the next request) and renders a static template — it
+    never echoes the exception, so no stack trace can leak to a user even if DEBUG is on."""
+
+    @app.errorhandler(404)
+    def not_found(error):  # noqa: ANN001, ANN202
+        return render_template("errors/404.html"), 404
+
+    @app.errorhandler(500)
+    def internal_error(error):  # noqa: ANN001, ANN202
+        db.session.rollback()
+        return render_template("errors/500.html"), 500
 
 
 def create_app(config: type = Config) -> Flask:
@@ -24,6 +39,8 @@ def create_app(config: type = Config) -> Flask:
     app.register_blueprint(dashboard_bp)
     app.register_blueprint(tasks_bp)
     app.register_blueprint(settings_bp)
+
+    _register_error_handlers(app)
 
     @app.get("/")
     def index() -> tuple[str, int]:
