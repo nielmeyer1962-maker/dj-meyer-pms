@@ -44,8 +44,14 @@ jobs:
       - name: Tests
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost/djmeyer_pms_test
+          # The unit suite builds its schema with create_all against this separate DB, so
+          # it runs on Postgres rather than SQLite. Kept distinct from the migration DB
+          # above so the two never collide.
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost/djmeyer_pms_unit
+          PGPASSWORD: postgres
           SECRET_KEY: ci-test-key
           FLASK_APP: run.py
         run: |
+          psql -h localhost -U postgres -c "CREATE DATABASE djmeyer_pms_unit;"
           python -m flask db upgrade
           pytest -v
