@@ -50,6 +50,29 @@ def test_list_tasks_shows_all_tasks(client):
     assert "Draft objection letter" in body
 
 
+def test_list_tasks_hides_archived_client_tasks(client):
+    """A task on an archived (active=False) client never renders on the board,
+    while an active client's task does — mirroring the obligation/CIPC dashboard
+    gating (H1 chunk 2)."""
+    active = _make_client("Active Visible Ltd")
+    archived = Client(
+        legal_name="Archived Hidden Ltd", entity_type=EntityType.PTY_LTD, active=False
+    )
+    db.session.add(archived)
+    db.session.commit()
+    db.session.add_all(
+        [
+            Task(client_id=active.id, title="Visible task", due_date=date(2026, 6, 30)),
+            Task(client_id=archived.id, title="Hidden task", due_date=date(2026, 6, 30)),
+        ]
+    )
+    db.session.commit()
+
+    body = client.get("/dashboard/tasks/").data.decode()
+    assert "Visible task" in body
+    assert "Hidden task" not in body
+
+
 def test_list_tasks_groups_by_status(client):
     """One task in each status renders under its own status section header,
     in OPEN → DONE → CANCELLED order."""

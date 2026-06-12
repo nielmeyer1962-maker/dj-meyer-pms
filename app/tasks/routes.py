@@ -26,13 +26,17 @@ def list_tasks():
     view_arg = request.args.get("view", "")
 
     # selectinload client + assignee to avoid N+1 across the row loop, per the
-    # Task model's relationship note.
+    # Task model's relationship note. Join Client and filter on active so an
+    # archived (soft-deleted) client's tasks drop off the board, mirroring the
+    # obligation/CIPC dashboard queries (H1 chunk 2).
     stmt = (
         db.select(Task)
         .options(
             selectinload(Task.client),
             selectinload(Task.assignee),
         )
+        .join(Client, Task.client_id == Client.id)
+        .where(Client.active.is_(True))
         .order_by(Task.due_date.asc())
     )
 
