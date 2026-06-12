@@ -1,3 +1,5 @@
+import os
+
 import pytest
 from flask.testing import FlaskClient
 from sqlalchemy import event
@@ -10,7 +12,9 @@ from app.extensions import db as _db
 
 class TestConfig(Config):
     TESTING = True
-    SQLALCHEMY_DATABASE_URI = "sqlite:///:memory:"
+    # Run on real Postgres when TEST_DATABASE_URL is set (CI), else SQLite in-memory
+    # (the local default — fast, zero-setup).
+    SQLALCHEMY_DATABASE_URI = os.environ.get("TEST_DATABASE_URL", "sqlite:///:memory:")
     WTF_CSRF_ENABLED = False
 
 

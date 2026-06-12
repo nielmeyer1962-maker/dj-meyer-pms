@@ -41,11 +41,26 @@ jobs:
       - name: Format check
         run: ruff format --check .
 
-      - name: Tests
+      - name: Migrate (smoke — proves migrations apply on Postgres)
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost/djmeyer_pms_test
           SECRET_KEY: ci-test-key
           FLASK_APP: run.py
-        run: |
-          python -m flask db upgrade
-          pytest -v
+        run: python -m flask db upgrade
+
+      - name: Create suite database
+        # The test suite owns its schema via create_all/drop_all per test, so it needs a
+        # clean database separate from the migration-smoke one above (whose seeded rows
+        # would otherwise leak into the first test).
+        run: >-
+          python -c "import psycopg2;
+          c = psycopg2.connect(host='localhost', user='postgres', password='postgres', dbname='postgres');
+          c.autocommit = True;
+          c.cursor().execute('CREATE DATABASE djmeyer_pms_suite')"
+
+      - name: Tests (full suite on Postgres)
+        # TEST_DATABASE_URL makes conftest run on real Postgres; without it the suite uses
+        # SQLite in-memory (the unchanged local default).
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost/djmeyer_pms_suite
+        run: pytest -v
