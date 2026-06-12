@@ -10,11 +10,15 @@ moment of the change so later renames/deletes can't rewrite history.
 from __future__ import annotations
 
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, func
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.extensions import db
+
+if TYPE_CHECKING:
+    from app.models.staff import Staff
 
 # kind values — which domain table instance_id points at.
 KIND_OBLIGATION = "OBLIGATION"
@@ -40,6 +44,9 @@ class StatusEvent(db.Model):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+    # Read-only convenience for the history view; "—" when the actor was deleted.
+    actor: Mapped[Staff | None] = relationship("Staff", lazy="select")
 
     __table_args__ = (Index("ix_status_events_kind_instance", "kind", "instance_id"),)
 

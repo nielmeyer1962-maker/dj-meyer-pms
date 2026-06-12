@@ -47,7 +47,7 @@ from app.services.obligations.transitions import (
     mark_submitted,
     revert_to_pending,
 )
-from app.utils.dates import today_sast
+from app.utils.dates import to_sast, today_sast
 from app.utils.staff import UNASSIGNED_SENTINEL, get_active_staff
 
 bp = Blueprint("dashboard", __name__, url_prefix="/dashboard")
@@ -226,6 +226,29 @@ def list_obligations():
     )
 
 
+def _describe_event(e: StatusEvent) -> str:
+    verb = "Status" if e.event == EVENT_TRANSITION else "Reassigned"
+    return f"{verb}: {e.from_value} → {e.to_value}"
+
+
+def _obligation_history(instance_id: int) -> list[dict]:
+    """This obligation's audit events, newest first, as display-ready rows."""
+    events = db.session.scalars(
+        db.select(StatusEvent)
+        .options(selectinload(StatusEvent.actor))
+        .where(StatusEvent.kind == KIND_OBLIGATION, StatusEvent.instance_id == instance_id)
+        .order_by(StatusEvent.created_at.desc(), StatusEvent.id.desc())
+    ).all()
+    return [
+        {
+            "when": to_sast(e.created_at).strftime("%Y-%m-%d %H:%M"),
+            "actor": e.actor.full_name if e.actor else "—",
+            "description": _describe_event(e),
+        }
+        for e in events
+    ]
+
+
 @bp.get("/obligations/<int:obligation_id>")
 def obligation_detail(obligation_id: int):
     instance = db.get_or_404(
@@ -253,6 +276,7 @@ def obligation_detail(obligation_id: int):
         is_overdue=is_overdue,
         notes_form=NotesForm(notes=instance.notes),
         reassign_form=reassign_form,
+        history=_obligation_history(instance.id),
     )
 
 
@@ -282,6 +306,7 @@ def update_obligation_notes(obligation_id: int):
             is_overdue=is_overdue,
             notes_form=form,
             reassign_form=reassign_form,
+            history=_obligation_history(instance.id),
         )
     raw = (form.notes.data or "").strip()
     instance.notes = raw if raw else None
