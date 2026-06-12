@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from flask import Blueprint, abort, flash, redirect, render_template, request, url_for
 from flask_login import current_user
+from sqlalchemy import or_
 from sqlalchemy.orm import selectinload
 
 from app.dashboard.forms import NotesForm, ReassignForm
@@ -149,6 +150,9 @@ def _obligation_select(filters: dict, window: str, today):
         stmt = stmt.where(ObligationInstance.obligation_type == ObligationType[type_arg])
     if filters["client_id"] is not None:
         stmt = stmt.where(ObligationInstance.client_id == filters["client_id"])
+    elif filters["client_q"]:
+        term = f"%{filters['client_q']}%"
+        stmt = stmt.where(or_(Client.legal_name.ilike(term), Client.known_as.ilike(term)))
     if filters["assignee"] == UNASSIGNED_SENTINEL:
         stmt = stmt.where(ObligationInstance.assignee_id.is_(None))
     elif filters["assignee_id"] is not None:
@@ -171,6 +175,9 @@ def _cipc_select(filters: dict, window: str, today):
     )
     if filters["client_id"] is not None:
         stmt = stmt.where(CIPCAnnualInstance.client_id == filters["client_id"])
+    elif filters["client_q"]:
+        term = f"%{filters['client_q']}%"
+        stmt = stmt.where(or_(Client.legal_name.ilike(term), Client.known_as.ilike(term)))
     if filters["assignee"] == UNASSIGNED_SENTINEL:
         stmt = stmt.where(CIPCAnnualInstance.assignee_id.is_(None))
     elif filters["assignee_id"] is not None:
@@ -210,16 +217,18 @@ def list_obligations():
     assignee_arg = request.args.get("assignee", "")
     type_arg = request.args.get("type", "")
     client_arg = request.args.get("client", "")
+    client_q = request.args.get("client_q", "").strip()
     window = _resolve_window(request.args.get("window", ""))
 
-    # Client dropdown lists active clients only; the filter narrows both row kinds to one.
-    all_clients = db.session.scalars(
-        db.select(Client).where(Client.active.is_(True)).order_by(Client.legal_name)
-    ).all()
-    client_id_filter = next(
-        (cl.id for cl in all_clients if str(cl.id) == client_arg),
-        None,
-    )
+    # Client filter: an explicit client id (deep-link / preserved across actions) takes
+    # precedence over the search box. Validate the id is a real, active client via a single
+    # PK lookup — an unknown or non-numeric id is ignored (all clients), so a stale deep-link
+    # never blanks the list. No full client fetch (that was the dropdown's scale cost).
+    client_id_filter = None
+    if client_arg.isdigit():
+        candidate = db.session.get(Client, int(client_arg))
+        if candidate is not None and candidate.active:
+            client_id_filter = candidate.id
     # Resolve an assignee code to a live staff id once, here, so both sources share it.
     assignee_match = (
         next((s for s in active_staff if s.code == assignee_arg), None) if assignee_arg else None
@@ -228,6 +237,8 @@ def list_obligations():
         "status": status_arg,
         "type": type_arg,
         "client_id": client_id_filter,
+        # The text search only applies when no explicit client id won precedence.
+        "client_q": client_q if client_id_filter is None else "",
         "assignee": assignee_arg,
         "assignee_id": assignee_match.id if assignee_match is not None else None,
     }
@@ -315,8 +326,7 @@ def list_obligations():
         current_assignee=assignee_arg,
         current_window=window,
         current_type=type_arg,
-        current_client=client_arg,
-        clients=all_clients,
+        current_client_q=client_q,
         statuses=list(ObligationStatus),
         window_choices=_WINDOW_CHOICES,
         total_count=total_count,

@@ -34,12 +34,8 @@
   </div>
   <div class="col-md-3">
     <label for="filter-client" class="form-label">Client</label>
-    <select id="filter-client" name="client" class="form-select form-select-sm">
-      <option value="">All</option>
-      {% for cl in clients %}
-        <option value="{{ cl.id }}" {% if current_client == cl.id|string %}selected{% endif %}>{{ cl.legal_name }}</option>
-      {% endfor %}
-    </select>
+    <input type="text" id="filter-client" name="client_q" value="{{ current_client_q }}"
+           class="form-control form-control-sm" placeholder="Search name…" autocomplete="off">
   </div>
   <div class="col-md-3">
     <label for="filter-window" class="form-label">Window</label>

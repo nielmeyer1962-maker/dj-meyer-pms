@@ -814,10 +814,12 @@ def test_client_filter_applies_to_cipc(client, two_client_world):
     assert two_client_world["a_due"] not in body
 
 
-def test_client_filter_repaints_selection(client, two_client_world):
-    a_id = two_client_world["a_id"]
-    body = client.get(f"/dashboard/?client={a_id}").data.decode()
-    assert f'<option value="{a_id}" selected>Acme Pty Ltd</option>' in body
+def test_client_filter_renders_search_input(client, two_client_world):
+    """The client filter is now a text search box (not a 2,000-option dropdown); the typed
+    term repaints into the input value."""
+    body = client.get("/dashboard/?client_q=Acme").data.decode()
+    assert 'name="client_q"' in body
+    assert 'value="Acme"' in body
 
 
 def test_invalid_client_filter_is_ignored(client, two_client_world):
