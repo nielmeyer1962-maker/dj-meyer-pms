@@ -30,8 +30,10 @@ def validate_secret_key(app) -> None:
 
 class Config:
     SECRET_KEY: str = os.environ.get("SECRET_KEY", PLACEHOLDER_SECRET_KEY)
+    # Default matches the local dev Postgres on :5433 (see CLAUDE.md). Overridden by
+    # DATABASE_URL in every real environment; this fallback just shouldn't be wrong.
     SQLALCHEMY_DATABASE_URI: str = os.environ.get(
-        "DATABASE_URL", "postgresql://localhost/djmeyer_pms"
+        "DATABASE_URL", "postgresql://localhost:5433/djmeyer_pms"
     )
     SQLALCHEMY_TRACK_MODIFICATIONS: bool = False
     MAIL_SERVER: str = os.environ.get("MAIL_SERVER", "smtp.gmail.com")
