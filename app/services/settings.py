@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from app.extensions import db
 from app.models.app_setting import (
+    DEFAULT_ITR12_NONPROVISIONAL,
+    DEFAULT_ITR12_PROVISIONAL,
     KEY_ITR12_NONPROVISIONAL_DAY,
     KEY_ITR12_NONPROVISIONAL_MONTH,
     KEY_ITR12_PROVISIONAL_DAY,
@@ -43,13 +45,23 @@ def set_setting(key: str, value: str) -> None:
 def get_itr12_deadline(provisional: bool) -> DeadlineDM:
     """The ITR12 filing deadline as a validated day+month, chosen by whether the individual
     is registered for provisional tax (client.has_provisional_tax). Provisional → January,
-    else → October. Read from AppSetting so the firm can adjust it via the settings page."""
+    else → October. Read from AppSetting so the firm can adjust it via the settings page.
+
+    Falls back to the canonical DEFAULT_ITR12_* when the keys are unseeded (KeyError), so
+    generation never crashes on a fresh DB that has not run the seeding migration — the
+    statutory default is used until the firm overrides it."""
     if provisional:
+        try:
+            return DeadlineDM(
+                day=get_setting_int(KEY_ITR12_PROVISIONAL_DAY),
+                month=get_setting_int(KEY_ITR12_PROVISIONAL_MONTH),
+            )
+        except KeyError:
+            return DEFAULT_ITR12_PROVISIONAL
+    try:
         return DeadlineDM(
-            day=get_setting_int(KEY_ITR12_PROVISIONAL_DAY),
-            month=get_setting_int(KEY_ITR12_PROVISIONAL_MONTH),
+            day=get_setting_int(KEY_ITR12_NONPROVISIONAL_DAY),
+            month=get_setting_int(KEY_ITR12_NONPROVISIONAL_MONTH),
         )
-    return DeadlineDM(
-        day=get_setting_int(KEY_ITR12_NONPROVISIONAL_DAY),
-        month=get_setting_int(KEY_ITR12_NONPROVISIONAL_MONTH),
-    )
+    except KeyError:
+        return DEFAULT_ITR12_NONPROVISIONAL
