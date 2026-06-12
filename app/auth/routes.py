@@ -3,9 +3,9 @@ from __future__ import annotations
 from urllib.parse import urlparse
 
 from flask import Blueprint, flash, redirect, render_template, request, url_for
-from flask_login import login_required, login_user, logout_user
+from flask_login import current_user, login_required, login_user, logout_user
 
-from app.auth.forms import LoginForm
+from app.auth.forms import AccountPasswordForm, LoginForm
 from app.extensions import db, login_manager
 from app.models.staff import Staff
 
@@ -49,3 +49,18 @@ def logout():
     logout_user()
     flash("You have been logged out.", "success")
     return redirect(url_for("auth.login"))
+
+
+@bp.route("/account/password", methods=["GET", "POST"])
+@login_required
+def account_password():
+    form = AccountPasswordForm()
+    if form.validate_on_submit():
+        if not current_user.check_password(form.current_password.data):
+            form.current_password.errors.append("Current password is incorrect.")
+        else:
+            current_user.set_password(form.new_password.data)
+            db.session.commit()
+            flash("Your password has been changed.", "success")
+            return redirect(url_for("auth.account_password"))
+    return render_template("auth/account_password.html", form=form)

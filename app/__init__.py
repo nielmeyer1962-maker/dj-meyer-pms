@@ -71,6 +71,10 @@ def create_app(config: type = Config) -> Flask:
     _register_error_handlers(app)
     _register_login_wall(app)
 
+    from app.cli import staff_cli
+
+    app.cli.add_command(staff_cli)
+
     @app.get("/")
     def index() -> tuple[str, int]:
         return "DJ Meyer PMS — ok", 200
