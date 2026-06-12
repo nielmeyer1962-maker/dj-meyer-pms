@@ -8,6 +8,35 @@ from sqlalchemy.engine import Engine
 from app import create_app
 from app.config import Config
 from app.extensions import db as _db
+from app.models.staff import Staff, StaffRole
+
+# Shared password for every fixture-created auth staff member.
+_TEST_PASSWORD = "fixture-password-123"
+
+
+def _make_auth_staff(*, code: str, email: str, is_admin: bool) -> Staff:
+    """Create + persist an active staff member who can log in (has a password hash)."""
+    s = Staff(
+        code=code,
+        full_name=f"{code} Test User",
+        email=email,
+        role=StaffRole.TAX,
+        is_admin=is_admin,
+        active=True,
+    )
+    s.set_password(_TEST_PASSWORD)
+    _db.session.add(s)
+    _db.session.commit()
+    return s
+
+
+def _logged_in_client(app, *, code: str, email: str, is_admin: bool) -> FlaskClient:
+    _make_auth_staff(code=code, email=email, is_admin=is_admin)
+    c = app.test_client()
+    resp = c.post("/login", data={"email": email, "password": _TEST_PASSWORD})
+    # 302 → landed past the login wall; anything else means login silently failed.
+    assert resp.status_code == 302, f"fixture login failed: {resp.status_code}"
+    return c
 
 
 class TestConfig(Config):
@@ -49,4 +78,18 @@ def app():
 
 @pytest.fixture
 def client(app) -> FlaskClient:
+    """Authenticated as an ordinary (non-admin) staff member, so the existing route suite
+    runs behind the login wall untouched."""
+    return _logged_in_client(app, code="AUTH", email="auth@test.local", is_admin=False)
+
+
+@pytest.fixture
+def anon_client(app) -> FlaskClient:
+    """No login — for the auth tests themselves (redirects, bad credentials, etc.)."""
     return app.test_client()
+
+
+@pytest.fixture
+def admin_client(app) -> FlaskClient:
+    """Authenticated as an admin staff member — for admin-gate tests (chunk 4)."""
+    return _logged_in_client(app, code="ADMIN", email="admin@test.local", is_admin=True)

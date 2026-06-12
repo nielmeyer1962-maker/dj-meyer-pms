@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from zoneinfo import ZoneInfo
 
 # The firm operates in Africa/Johannesburg. All stored timestamps remain UTC tz-aware;
@@ -12,3 +12,11 @@ _SAST = ZoneInfo("Africa/Johannesburg")
 
 def today_sast() -> date:
     return datetime.now(_SAST).date()
+
+
+def to_sast(dt: datetime) -> datetime:
+    """Convert a stored timestamp to SAST for display. Postgres returns tz-aware UTC;
+    SQLite drops the tzinfo, so a naive value is assumed to be UTC."""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    return dt.astimezone(_SAST)

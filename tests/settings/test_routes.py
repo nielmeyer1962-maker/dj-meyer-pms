@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from app.extensions import db
 from app.models.app_setting import (
     APP_SETTING_SEED,
@@ -7,6 +9,13 @@ from app.models.app_setting import (
     KEY_ITR12_PROVISIONAL_MONTH,
     AppSetting,
 )
+
+
+@pytest.fixture
+def client(admin_client):
+    """The Settings blueprint is admin-only (H2 chunk 4), so this module's `client` is the
+    admin client — the existing settings tests exercise the real (admin) path unchanged."""
+    return admin_client
 
 
 def _seed_settings() -> None:

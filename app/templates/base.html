@@ -10,11 +10,22 @@
   <nav class="navbar navbar-expand-lg navbar-dark bg-dark mb-4">
     <div class="container">
       <a class="navbar-brand" href="/">DJ Meyer PMS</a>
-      <div class="navbar-nav">
+      {% if current_user.is_authenticated %}
+      <div class="navbar-nav me-auto">
         <a class="nav-link" href="{{ url_for('dashboard.list_obligations') }}">Dashboard</a>
         <a class="nav-link" href="{{ url_for('clients.list_clients') }}">Clients</a>
+        {% if current_user.is_admin %}
         <a class="nav-link" href="{{ url_for('settings.edit_settings') }}">Settings</a>
+        {% endif %}
       </div>
+      <div class="navbar-nav align-items-lg-center">
+        <span class="navbar-text me-3">{{ current_user.full_name }}</span>
+        <form method="post" action="{{ url_for('auth.logout') }}" class="d-inline">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" class="btn btn-sm btn-outline-light">Log out</button>
+        </form>
+      </div>
+      {% endif %}
     </div>
   </nav>
   <div class="container">

@@ -1,5 +1,6 @@
 from flask import Blueprint, flash, redirect, render_template, request, url_for
 
+from app.auth.decorators import admin_required
 from app.clients.forms import ClientForm
 from app.extensions import db
 from app.models.client import Client, EntityType, VatCategory, VatSubmissionMethod
@@ -103,6 +104,7 @@ def edit_client(client_id: int):
 
 
 @bp.post("/<int:client_id>/archive")
+@admin_required
 def archive_client(client_id: int):
     client = db.get_or_404(Client, client_id)
     client.active = False

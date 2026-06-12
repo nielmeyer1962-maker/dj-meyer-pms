@@ -36,6 +36,10 @@ class Config:
         "DATABASE_URL", "postgresql://localhost:5433/djmeyer_pms"
     )
     SQLALCHEMY_TRACK_MODIFICATIONS: bool = False
+    # Session-cookie hardening: never readable by JS, and not sent on cross-site
+    # navigations (Lax still allows top-level GETs so normal links work).
+    SESSION_COOKIE_HTTPONLY: bool = True
+    SESSION_COOKIE_SAMESITE: str = "Lax"
     MAIL_SERVER: str = os.environ.get("MAIL_SERVER", "smtp.gmail.com")
     MAIL_PORT: int = int(os.environ.get("MAIL_PORT", "587"))
     MAIL_USE_TLS: bool = True

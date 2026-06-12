@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Log in — DJ Meyer PMS{% endblock %}
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-md-5 col-lg-4">
+    <h1 class="h4 mb-4">Log in</h1>
+    <form method="post" action="{{ url_for('auth.login', next=request.args.get('next')) }}">
+      {{ form.hidden_tag() }}
+      <div class="mb-3">
+        {{ form.email.label(class="form-label") }}
+        {{ form.email(class="form-control", autofocus=true, autocomplete="username") }}
+      </div>
+      <div class="mb-3">
+        {{ form.password.label(class="form-label") }}
+        {{ form.password(class="form-control", autocomplete="current-password") }}
+      </div>
+      {{ form.submit(class="btn btn-primary w-100") }}
+    </form>
+  </div>
+</div>
+{% endblock %}

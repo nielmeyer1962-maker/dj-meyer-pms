@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from app.extensions import db
+from app.models.staff import Staff, StaffRole
+
 
 def test_404_renders_friendly_page(client):
     resp = client.get("/this-route-does-not-exist")
@@ -23,7 +26,16 @@ def test_500_renders_friendly_page_without_traceback(app):
     # exactly as it would in production.
     app.config["PROPAGATE_EXCEPTIONS"] = False
 
-    resp = app.test_client().get("/boom")
+    # Authenticate past the login wall. The /boom route is registered above, BEFORE this
+    # first request, so Flask still accepts it.
+    staff = Staff(code="BOOM", full_name="Boom", email="boom@test.local", role=StaffRole.TAX)
+    staff.set_password("boom-password-1234")
+    db.session.add(staff)
+    db.session.commit()
+    c = app.test_client()
+    c.post("/login", data={"email": "boom@test.local", "password": "boom-password-1234"})
+
+    resp = c.get("/boom")
     assert resp.status_code == 500
     body = resp.data.decode()
     assert "Something went wrong" in body
