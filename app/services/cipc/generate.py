@@ -24,6 +24,7 @@ from datetime import date, timedelta
 from app.models.cipc import CIPCAnnualInstance, CIPCAnnualStatus
 from app.models.client import Client, EntityType
 from app.services.cipc.due_dates import cipc_ar_due_date
+from app.utils.dates import today_sast
 
 # Entity types that file a CIPC Annual Return.
 CIPC_FILING_TYPES = frozenset({EntityType.PTY_LTD, EntityType.INC, EntityType.NPC, EntityType.CC})
@@ -48,7 +49,7 @@ def generate_cipc_annual(
     (centralised to Tsego); the caller resolves it.
 
     The today parameter exists solely for test determinism. In production, leave it as
-    None and the function uses date.today().
+    None and the function uses today_sast().
     """
     if client.entity_type not in CIPC_FILING_TYPES:
         return []
@@ -56,7 +57,7 @@ def generate_cipc_annual(
         return []
 
     if today is None:
-        today = date.today()
+        today = today_sast()
 
     month = client.cipc_anniversary_month
     day = client.cipc_anniversary_day

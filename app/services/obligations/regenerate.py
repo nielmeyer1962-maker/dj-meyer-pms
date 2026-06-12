@@ -21,6 +21,7 @@ from app.services.obligations.emp201 import generate_emp201
 from app.services.obligations.it12 import generate_it12
 from app.services.obligations.itr14 import generate_itr14
 from app.services.obligations.vat201 import generate_vat201
+from app.utils.dates import today_sast
 
 
 class RegenerateResult(NamedTuple):
@@ -46,7 +47,7 @@ def regenerate(client: Client, today: date | None = None) -> RegenerateResult:
     handler in the regenerate route catches it.
     """
     if today is None:
-        today = date.today()
+        today = today_sast()
 
     existing: dict[tuple[ObligationType, date], ObligationInstance] = {
         (row.obligation_type, row.period_end): row

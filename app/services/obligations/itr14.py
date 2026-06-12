@@ -29,6 +29,7 @@ from datetime import date, timedelta
 from app.models.client import Client, EntityType
 from app.models.obligation import ObligationInstance, ObligationStatus, ObligationType
 from app.utils.business_days import shift_to_next_business_day
+from app.utils.dates import today_sast
 
 # Entity types that file an ITR14 (company income-tax return).
 _ITR14_ENTITY_TYPES: frozenset[EntityType] = frozenset(
@@ -64,7 +65,7 @@ def generate_itr14(
       - both client.year_end_month and client.year_end_day are set.
 
     The today parameter exists solely for test determinism. In production, leave
-    it as None and the function uses date.today().
+    it as None and the function uses today_sast().
     """
     if not client.has_income_tax:
         return []
@@ -74,7 +75,7 @@ def generate_itr14(
         return []
 
     if today is None:
-        today = date.today()
+        today = today_sast()
 
     month = client.year_end_month
     day = client.year_end_day
