@@ -8,6 +8,19 @@ def create_app(config: type = Config) -> Flask:
     app = Flask(__name__)
     app.config.from_object(config)
 
+    # Fail hard rather than boot with a guessable signing key. CSRF tokens and session
+    # cookies are signed with SECRET_KEY; an empty or placeholder key in production lets
+    # anyone forge them. Tests run with a known key and TESTING=True, so they are exempt.
+    if not app.config.get("TESTING") and app.config.get("SECRET_KEY") in (
+        None,
+        "",
+        "change-me-in-production",
+    ):
+        raise RuntimeError(
+            "SECRET_KEY is unset or still the placeholder. Set a strong SECRET_KEY in the "
+            "environment before starting the app."
+        )
+
     db.init_app(app)
     migrate.init_app(app, db)
     csrf.init_app(app)
