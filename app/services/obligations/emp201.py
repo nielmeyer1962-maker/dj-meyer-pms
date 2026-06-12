@@ -93,6 +93,8 @@ def generate_emp201(
     The today parameter exists solely for test determinism. In production, leave
     it as None and the function uses today_sast().
     """
+    if not client.active:
+        return []
     if not client.has_paye:
         return []
 

@@ -1020,3 +1020,55 @@ def test_itr12_detail_submitted_is_terminal(client, itr12_world):
     body = client.get(f"/dashboard/obligations/{oid}").data.decode()
     for action in ("mark-paid", "mark-submitted", "mark-exempt", "mark-in-progress"):
         assert f"/dashboard/obligations/{oid}/{action}" not in body
+
+
+# --- Archived clients are inert on the dashboard (H1 chunk 2) ---
+
+
+def test_archived_client_rows_and_dropdown_absent_from_dashboard(client, app):
+    """An archived client's obligation and CIPC rows never appear in the list, and the
+    client never appears in the filter dropdown; an active client's row still renders."""
+    with app.app_context():
+        archived = Client(legal_name="Ghost Pty Ltd", entity_type=EntityType.PTY_LTD, active=False)
+        active = Client(legal_name="Live Pty Ltd", entity_type=EntityType.PTY_LTD)
+        db.session.add_all([archived, active])
+        db.session.commit()
+
+        db.session.add_all(
+            [
+                ObligationInstance(
+                    client_id=archived.id,
+                    obligation_type=ObligationType.VAT201,
+                    period_start=date(2026, 1, 1),
+                    period_end=date(2026, 1, 31),
+                    submission_due_date=date(2026, 1, 31),
+                    payment_due_date=date(2026, 1, 31),
+                    status=ObligationStatus.PENDING,
+                ),
+                CIPCAnnualInstance(
+                    client_id=archived.id,
+                    anniversary_date=date(2025, 3, 15),
+                    due_date=date(2026, 3, 15),
+                    status=CIPCAnnualStatus.GENERATED,
+                ),
+                ObligationInstance(
+                    client_id=active.id,
+                    obligation_type=ObligationType.VAT201,
+                    period_start=date(2026, 2, 1),
+                    period_end=date(2026, 2, 28),
+                    submission_due_date=date(2026, 2, 28),
+                    payment_due_date=date(2026, 2, 28),
+                    status=ObligationStatus.PENDING,
+                ),
+            ]
+        )
+        db.session.commit()
+
+    body = client.get("/dashboard/").data.decode()
+    # Active client's row renders; archived obligation + CIPC rows do not.
+    assert "2026-02-28" in body
+    assert "2026-01-31" not in body
+    assert "2026-03-15" not in body
+    # Dropdown lists the active client only.
+    assert "Live Pty Ltd" in body
+    assert "Ghost Pty Ltd" not in body

@@ -51,6 +51,8 @@ def generate_cipc_annual(
     The today parameter exists solely for test determinism. In production, leave it as
     None and the function uses today_sast().
     """
+    if not client.active:
+        return []
     if client.entity_type not in CIPC_FILING_TYPES:
         return []
     if client.cipc_anniversary_month is None or client.cipc_anniversary_day is None:
