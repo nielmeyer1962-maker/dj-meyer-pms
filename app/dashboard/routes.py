@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 from flask import Blueprint, abort, flash, redirect, render_template, request, url_for
+from flask_login import current_user
 from sqlalchemy.orm import selectinload
 
 from app.dashboard.forms import NotesForm, ReassignForm
@@ -12,6 +13,13 @@ from app.models.cipc import CIPCAnnualInstance
 from app.models.client import Client
 from app.models.obligation import ObligationInstance, ObligationStatus, ObligationType
 from app.models.staff import Staff
+from app.models.status_event import (
+    EVENT_REASSIGN,
+    EVENT_TRANSITION,
+    KIND_CIPC,
+    KIND_OBLIGATION,
+    StatusEvent,
+)
 from app.services.cipc.predicates import overdue_filter as cipc_overdue_filter
 from app.services.cipc.transitions import (
     mark_ar_submitted as cipc_mark_ar_submitted,
@@ -300,13 +308,37 @@ def _redirect_after_action(instance_id: int):
     return _redirect_to_list_preserving_filters()
 
 
+def _stage_status_event(
+    kind: str, instance_id: int, event: str, from_value: str | None, to_value: str | None
+) -> None:
+    """Stage (don't commit) an audit row so it commits in the SAME transaction as the
+    change it records — the event and the change are atomic. The caller commits once."""
+    actor_id = current_user.id if current_user.is_authenticated else None
+    db.session.add(
+        StatusEvent(
+            kind=kind,
+            instance_id=instance_id,
+            event=event,
+            from_value=from_value,
+            to_value=to_value,
+            actor_staff_id=actor_id,
+        )
+    )
+
+
 def _apply_transition(obligation_id: int, action) -> None:
     instance = db.get_or_404(ObligationInstance, obligation_id)
+    from_status = instance.status.name
     try:
         action(instance)
     except ValueError as exc:
+        # Refused transition: roll back any partial mutation and write NO event.
+        db.session.rollback()
         flash(str(exc), "danger")
         return
+    _stage_status_event(
+        KIND_OBLIGATION, instance.id, EVENT_TRANSITION, from_status, instance.status.name
+    )
     db.session.commit()
     flash(f"Obligation {instance.id} → {instance.status.name}.", "success")
 
@@ -358,10 +390,25 @@ def _parse_assignee_id(raw: str) -> int | None:
     return staff.id
 
 
+def _assignee_code(staff_id: int | None) -> str:
+    """The staff code for an assignee id, or 'unassigned' for None."""
+    if staff_id is None:
+        return "unassigned"
+    staff = db.session.get(Staff, staff_id)
+    return staff.code if staff is not None else "unassigned"
+
+
 @bp.post("/obligations/<int:obligation_id>/reassign")
 def reassign_obligation(obligation_id: int):
     instance = db.get_or_404(ObligationInstance, obligation_id)
-    instance.assignee_id = _parse_assignee_id(request.form.get("assignee_id", ""))
+    from_code = _assignee_code(instance.assignee_id)
+    # _parse_assignee_id aborts(400) on an invalid target — before any event/commit, so a
+    # rejected reassign writes nothing.
+    new_id = _parse_assignee_id(request.form.get("assignee_id", ""))
+    instance.assignee_id = new_id
+    _stage_status_event(
+        KIND_OBLIGATION, instance.id, EVENT_REASSIGN, from_code, _assignee_code(new_id)
+    )
     db.session.commit()
     flash(f"Obligation {instance.id} reassigned.", "success")
     return _redirect_after_action(obligation_id)
@@ -374,11 +421,14 @@ def reassign_obligation(obligation_id: int):
 
 def _apply_cipc_transition(cipc_id: int, action) -> None:
     instance = db.get_or_404(CIPCAnnualInstance, cipc_id)
+    from_status = instance.status.name
     try:
         action(instance)
     except ValueError as exc:
+        db.session.rollback()
         flash(str(exc), "danger")
         return
+    _stage_status_event(KIND_CIPC, instance.id, EVENT_TRANSITION, from_status, instance.status.name)
     db.session.commit()
     flash(f"CIPC AR {instance.id} → {instance.status.name}.", "success")
 
@@ -422,7 +472,10 @@ def mark_cipc_declined(cipc_id: int):
 @bp.post("/cipc/<int:cipc_id>/reassign")
 def reassign_cipc(cipc_id: int):
     instance = db.get_or_404(CIPCAnnualInstance, cipc_id)
-    instance.assignee_id = _parse_assignee_id(request.form.get("assignee_id", ""))
+    from_code = _assignee_code(instance.assignee_id)
+    new_id = _parse_assignee_id(request.form.get("assignee_id", ""))
+    instance.assignee_id = new_id
+    _stage_status_event(KIND_CIPC, instance.id, EVENT_REASSIGN, from_code, _assignee_code(new_id))
     db.session.commit()
     flash(f"CIPC AR {instance.id} reassigned.", "success")
     return _redirect_to_list_preserving_filters()
