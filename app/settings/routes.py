@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from flask import Blueprint, flash, redirect, render_template, request, url_for
 
+from app.auth.decorators import require_admin
 from app.extensions import db
 from app.models.app_setting import (
     DEFAULT_ITR12_NONPROVISIONAL,
@@ -15,6 +16,13 @@ from app.services.settings import get_setting_int, set_setting
 from app.settings.forms import ITR12DeadlinesForm
 
 bp = Blueprint("settings", __name__, url_prefix="/settings")
+
+
+@bp.before_request
+def _settings_requires_admin() -> None:
+    """Guard the WHOLE settings blueprint: every current and future route is admin-only,
+    so a new settings view can never be added unguarded by accident."""
+    require_admin()
 
 
 def _current_or_default(key: str, default: int) -> int:

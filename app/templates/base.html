@@ -14,7 +14,9 @@
       <div class="navbar-nav me-auto">
         <a class="nav-link" href="{{ url_for('dashboard.list_obligations') }}">Dashboard</a>
         <a class="nav-link" href="{{ url_for('clients.list_clients') }}">Clients</a>
+        {% if current_user.is_admin %}
         <a class="nav-link" href="{{ url_for('settings.edit_settings') }}">Settings</a>
+        {% endif %}
       </div>
       <div class="navbar-nav align-items-lg-center">
         <span class="navbar-text me-3">{{ current_user.full_name }}</span>

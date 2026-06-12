@@ -31,6 +31,10 @@ def _register_error_handlers(app: Flask) -> None:
     def not_found(error):  # noqa: ANN001, ANN202
         return render_template("errors/404.html"), 404
 
+    @app.errorhandler(403)
+    def forbidden(error):  # noqa: ANN001, ANN202
+        return render_template("errors/403.html"), 403
+
     @app.errorhandler(500)
     def internal_error(error):  # noqa: ANN001, ANN202
         db.session.rollback()
