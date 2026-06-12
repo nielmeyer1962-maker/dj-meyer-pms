@@ -348,3 +348,23 @@ def test_task_edit_missing_task_returns_404(client):
     """GET edit for a non-existent task id returns 404."""
     resp = client.get("/dashboard/tasks/99999/edit")
     assert resp.status_code == 404
+
+
+def test_list_tasks_hides_archived_client_tasks(client):
+    """A task whose client is archived (active=False) is kept off the board, while an
+    active client's task still renders — mirrors the obligations dashboard (H1 ch2)."""
+    active = _make_client("Live Pty Ltd")
+    archived = Client(legal_name="Ghost Pty Ltd", entity_type=EntityType.PTY_LTD, active=False)
+    db.session.add(archived)
+    db.session.commit()
+    db.session.add_all(
+        [
+            Task(client_id=active.id, title="Live client task", due_date=date(2026, 6, 30)),
+            Task(client_id=archived.id, title="Archived client task", due_date=date(2026, 6, 30)),
+        ]
+    )
+    db.session.commit()
+
+    body = client.get("/dashboard/tasks/").data.decode()
+    assert "Live client task" in body
+    assert "Archived client task" not in body
