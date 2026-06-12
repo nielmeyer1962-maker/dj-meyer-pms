@@ -22,10 +22,16 @@ class Staff(db.Model):
     # Human identifier — NIEL, CANDI, TSEGO, etc. Unique and non-blank.
     code: Mapped[str] = mapped_column(String(16), unique=True, nullable=False)
     full_name: Mapped[str] = mapped_column(String(200), nullable=False)
-    # For the future notify-assignee feature. Lands now so we don't migrate
-    # again immediately. No @ shape check in 3b.
-    email: Mapped[str | None] = mapped_column(String(200))
+    # Login identifier. Nullable (a staff row may predate having an email) but
+    # UNIQUE so it can key authentication — Postgres permits many NULLs under a
+    # unique constraint, so emailless rows don't collide. No @ shape check.
+    email: Mapped[str | None] = mapped_column(String(200), unique=True)
     role: Mapped[StaffRole] = mapped_column(Enum(StaffRole), nullable=False)
+    # werkzeug password hash. Nullable: a staff row without a hash simply cannot
+    # log in yet (set via `flask staff set-password`). Never the raw password.
+    password_hash: Mapped[str | None] = mapped_column(String(255))
+    # Admin gate for the Settings blueprint and the client-archive action.
+    is_admin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     # Soft delete via active=False is the recommended routine path. Hard delete
     # is supported by the obligation_instances.assignee_id ON DELETE SET NULL FK.
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)

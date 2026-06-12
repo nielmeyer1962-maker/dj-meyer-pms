@@ -31,7 +31,14 @@ def create_app(config: type = Config) -> Flask:
     # Models without blueprints are imported here so they register with db.metadata.
     from app.clients.routes import bp as clients_bp
     from app.dashboard.routes import bp as dashboard_bp
-    from app.models import app_setting, cipc, cipc_ar_fee, obligation, staff  # noqa: F401
+    from app.models import (  # noqa: F401
+        app_setting,
+        cipc,
+        cipc_ar_fee,
+        obligation,
+        staff,
+        status_event,
+    )
     from app.settings.routes import bp as settings_bp
     from app.tasks.routes import bp as tasks_bp
 

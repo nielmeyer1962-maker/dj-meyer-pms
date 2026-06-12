@@ -82,3 +82,38 @@ def test_full_name_blank_raises(app, bad_name):
     with app.app_context():
         with pytest.raises(ValueError, match="full_name"):
             Staff(code="OK", full_name=bad_name, role=StaffRole.TAX)
+
+
+# --- H2 chunk 1: auth fields + unique email ---
+
+
+def test_staff_auth_field_defaults(app):
+    """password_hash defaults None (cannot log in yet); is_admin defaults False."""
+    with app.app_context():
+        s = Staff(code="NEW", full_name="New Person", role=StaffRole.TAX)
+        db.session.add(s)
+        db.session.commit()
+        assert s.password_hash is None
+        assert s.is_admin is False
+
+
+def test_staff_email_is_unique(app):
+    with app.app_context():
+        db.session.add(Staff(code="A", full_name="A", email="dup@x.co", role=StaffRole.TAX))
+        db.session.commit()
+        db.session.add(Staff(code="B", full_name="B", email="dup@x.co", role=StaffRole.TAX))
+        with pytest.raises(IntegrityError):
+            db.session.commit()
+
+
+def test_staff_null_emails_do_not_collide(app):
+    """A unique email column still permits multiple NULL-email staff."""
+    with app.app_context():
+        db.session.add_all(
+            [
+                Staff(code="N1", full_name="No Email One", role=StaffRole.TAX),
+                Staff(code="N2", full_name="No Email Two", role=StaffRole.TAX),
+            ]
+        )
+        db.session.commit()  # must not raise
+        assert db.session.scalar(db.select(db.func.count()).select_from(Staff)) == 2
