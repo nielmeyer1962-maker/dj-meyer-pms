@@ -188,6 +188,18 @@ def _count(core) -> int:
     return db.session.scalar(db.select(db.func.count()).select_from(core.subquery())) or 0
 
 
+_PAGE_SIZE = 50
+
+
+def _parse_page(raw: str) -> int:
+    """Page param: a positive int, defaulting to 1 on anything invalid."""
+    try:
+        page = int(raw)
+    except (TypeError, ValueError):
+        return 1
+    return page if page >= 1 else 1
+
+
 @bp.get("/")
 def list_obligations():
     today = today_sast()
@@ -223,30 +235,68 @@ def list_obligations():
     ob_core = _obligation_select(filters, window, today)
     cipc_core = _cipc_select(filters, window, today)
 
-    # Rows: pull each source ordered by due date, adapt to the uniform DashboardItem, then
-    # merge-sort by (due date, client name) — the ordering the obligation-only list used
-    # before CIPC was folded in.
-    items = []
-    if ob_core is not None:
-        ob_stmt = ob_core.options(
-            selectinload(ObligationInstance.client),
-            selectinload(ObligationInstance.assignee),
-        ).order_by(ObligationInstance.submission_due_date.asc(), Client.legal_name.asc())
-        items.extend(from_obligation(oi, today) for oi in db.session.scalars(ob_stmt).all())
-    if cipc_core is not None:
-        cipc_stmt = cipc_core.options(
-            selectinload(CIPCAnnualInstance.client),
-            selectinload(CIPCAnnualInstance.assignee),
-        ).order_by(CIPCAnnualInstance.due_date.asc(), Client.legal_name.asc())
-        items.extend(from_cipc(ci, today) for ci in db.session.scalars(cipc_stmt).all())
-    items.sort(key=lambda it: (it.due_date, it.client.legal_name if it.client else ""))
-
     # Summary counts via SQL COUNT under the same filters — never len() over rows. The
-    # in-window total reflects the current window; the overdue count forces window=overdue
-    # so it always reports true past-due work under the other active filters.
+    # in-window total reflects the current window (and drives the pager); the overdue count
+    # forces window=overdue so it always reports true past-due work under the other filters.
     total_count = _count(ob_core) + _count(cipc_core)
     overdue_count = _count(_obligation_select(filters, "overdue", today)) + _count(
         _cipc_select(filters, "overdue", today)
+    )
+
+    # Bounded merge pagination. To assemble global page N (rows [(N-1)*50, N*50) by due
+    # date) we need at most the first N*50 rows from EACH source: in the worst case the
+    # whole page comes from one source. So we LIMIT each query to page*50 in SQL, merge the
+    # two bounded lists, and slice — page 1 touches <= 100 rows regardless of book size.
+    # Both per-source orderings and the merge key are (due_date, client name, kind, id) so
+    # the merge is a total order with no duplicates or omissions across page boundaries.
+    total_pages = max(1, (total_count + _PAGE_SIZE - 1) // _PAGE_SIZE)
+    page = min(_parse_page(request.args.get("page", "1")), total_pages)
+    fetch_limit = page * _PAGE_SIZE
+
+    items = []
+    if ob_core is not None:
+        ob_stmt = (
+            ob_core.options(
+                selectinload(ObligationInstance.client),
+                selectinload(ObligationInstance.assignee),
+            )
+            .order_by(
+                ObligationInstance.submission_due_date.asc(),
+                Client.legal_name.asc(),
+                ObligationInstance.id.asc(),
+            )
+            .limit(fetch_limit)
+        )
+        items.extend(from_obligation(oi, today) for oi in db.session.scalars(ob_stmt).all())
+    if cipc_core is not None:
+        cipc_stmt = (
+            cipc_core.options(
+                selectinload(CIPCAnnualInstance.client),
+                selectinload(CIPCAnnualInstance.assignee),
+            )
+            .order_by(
+                CIPCAnnualInstance.due_date.asc(),
+                Client.legal_name.asc(),
+                CIPCAnnualInstance.id.asc(),
+            )
+            .limit(fetch_limit)
+        )
+        items.extend(from_cipc(ci, today) for ci in db.session.scalars(cipc_stmt).all())
+    items.sort(
+        key=lambda it: (it.due_date, it.client.legal_name if it.client else "", it.kind, it.id)
+    )
+    start = (page - 1) * _PAGE_SIZE
+    page_items = items[start : start + _PAGE_SIZE]
+
+    # Pager links preserve every active filter (drop the old page so it isn't duplicated).
+    base_args = {key: value for key, value in request.args.items() if key != "page"}
+    prev_url = (
+        url_for("dashboard.list_obligations", page=page - 1, **base_args) if page > 1 else None
+    )
+    next_url = (
+        url_for("dashboard.list_obligations", page=page + 1, **base_args)
+        if page < total_pages
+        else None
     )
 
     reassign_form = ReassignForm()
@@ -254,7 +304,7 @@ def list_obligations():
 
     return render_template(
         "dashboard/list.html",
-        items=items,
+        items=page_items,
         obligation_action_endpoints=_OBLIGATION_ACTION_ENDPOINTS,
         cipc_action_endpoints=_CIPC_ACTION_ENDPOINTS,
         active_staff=active_staff,
@@ -271,6 +321,11 @@ def list_obligations():
         window_choices=_WINDOW_CHOICES,
         total_count=total_count,
         overdue_count=overdue_count,
+        # Pager state.
+        page=page,
+        total_pages=total_pages,
+        prev_url=prev_url,
+        next_url=next_url,
         # Type choices span both kinds: each ObligationType, plus the CIPC AR sentinel.
         type_choices=[(t.name, t.name) for t in ObligationType]
         + [(_CIPC_TYPE_ARG, CIPC_TYPE_LABEL)],
