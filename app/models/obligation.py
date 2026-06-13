@@ -31,12 +31,16 @@ class ObligationType(enum.Enum):
     ITR14 = "ITR14"
     ITR12 = "ITR12"
     IRP6 = "IRP6"
+    EMP501_INTERIM = "EMP501_INTERIM"
+    EMP501_ANNUAL = "EMP501_ANNUAL"
 
     @property
     def has_payment_leg(self) -> bool:
         """True for obligations that are filed *and* paid (a payment leg), so "done"
         means PAID, not merely SUBMITTED. VAT201, EMP201 and IRP6 carry a payment leg;
-        everything else (e.g. EMP501, ITR14, ITR12, CIPC annual return) is file-only."""
+        everything else (e.g. ITR14, ITR12, EMP501, CIPC annual return) is file-only —
+        PAYE/UIF/SDL is paid monthly via EMP201, so the EMP501 reconciliation is a
+        declaration, done at SUBMITTED."""
         return self.value in _PAYMENT_LEG_TYPES
 
 

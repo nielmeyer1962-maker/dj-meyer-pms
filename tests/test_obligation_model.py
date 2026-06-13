@@ -257,6 +257,32 @@ def test_irp6_is_done_at_paid():
         assert oi.is_done is expected
 
 
+def test_emp501_values_are_members_and_file_only():
+    """Both EMP501 reconciliations are ObligationType members and file-only — the
+    reconciliation is a declaration (PAYE is paid monthly via EMP201), so neither carries
+    a payment leg."""
+    assert ObligationType.EMP501_INTERIM.value == "EMP501_INTERIM"
+    assert ObligationType.EMP501_ANNUAL.value == "EMP501_ANNUAL"
+    for t in (ObligationType.EMP501_INTERIM, ObligationType.EMP501_ANNUAL):
+        assert t.value not in _PAYMENT_LEG_TYPES
+        assert t.has_payment_leg is False
+
+
+def test_emp501_is_done_at_submitted():
+    """A file-only EMP501 is finished once SUBMITTED; EXEMPT is also done, PENDING/
+    IN_PROGRESS are not. is_done is a pure property, so no DB is needed."""
+    for emp501 in (ObligationType.EMP501_INTERIM, ObligationType.EMP501_ANNUAL):
+        oi = ObligationInstance(obligation_type=emp501)
+        for status, expected in (
+            (ObligationStatus.PENDING, False),
+            (ObligationStatus.IN_PROGRESS, False),
+            (ObligationStatus.SUBMITTED, True),
+            (ObligationStatus.EXEMPT, True),
+        ):
+            oi.status = status
+            assert oi.is_done is expected
+
+
 def test_window_code_column_behaviour(app):
     """window_code defaults to None (every non-IRP6 row leaves it unset) and round-trips
     the IRP6 period markers "01"/"02"/"03"."""
