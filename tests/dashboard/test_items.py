@@ -348,3 +348,28 @@ def test_non_irp6_has_no_window_or_voluntary_flag():
     item = from_obligation(_obligation(ObligationStatus.PENDING), TODAY)
     assert item.window_code is None
     assert item.is_voluntary is False
+
+
+# --- EMP501 (employer reconciliation): file-only, no window hints ---
+
+
+@pytest.mark.parametrize(
+    "emp501_type",
+    [ObligationType.EMP501_INTERIM, ObligationType.EMP501_ANNUAL],
+)
+def test_emp501_is_file_only_on_dashboard(emp501_type):
+    """Both EMP501 reconciliations are file-only: PENDING offers Mark submitted (no Mark
+    paid), and SUBMITTED is terminal — derived from has_payment_leg via is_done, no
+    EMP501-specific branch. No IRP6-style window/voluntary hints either."""
+    oi = _obligation(ObligationStatus.PENDING)
+    oi.obligation_type = emp501_type
+    pending = from_obligation(oi, TODAY)
+    assert "mark_submitted" in _keys(pending)
+    assert "mark_paid" not in _keys(pending)
+    assert pending.window_code is None
+    assert pending.is_voluntary is False
+
+    oi.status = ObligationStatus.SUBMITTED
+    submitted = from_obligation(oi, TODAY)
+    assert submitted.is_open is False
+    assert _keys(submitted) == []  # file-only → done at SUBMITTED → terminal
