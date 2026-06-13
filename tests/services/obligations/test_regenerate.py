@@ -345,8 +345,7 @@ def test_regenerate_emits_vat201_and_emp201_together(app):
         emp501 = [
             r
             for r in rows
-            if r.obligation_type
-            in (ObligationType.EMP501_INTERIM, ObligationType.EMP501_ANNUAL)
+            if r.obligation_type in (ObligationType.EMP501_INTERIM, ObligationType.EMP501_ANNUAL)
         ]
         # 12 monthly VAT201 (Cat C) + 12 monthly EMP201 in the 12-month window, plus the
         # two PAYE-gated EMP501 reconciliations (interim + annual) for the current tax year.
