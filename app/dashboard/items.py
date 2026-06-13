@@ -27,7 +27,7 @@ from datetime import date
 
 from app.models.cipc import CIPCAnnualInstance, CIPCAnnualStatus
 from app.models.client import Client
-from app.models.obligation import ObligationInstance, ObligationStatus
+from app.models.obligation import ObligationInstance, ObligationStatus, ObligationType
 from app.models.staff import Staff
 from app.services.cipc import predicates as cipc_predicates
 from app.services.cipc.transitions import _DECLINABLE_FROM as _CIPC_DECLINABLE_FROM
@@ -73,6 +73,11 @@ class DashboardItem:
     notes: str | None
     actions: tuple[Action, ...]
     reassignable: bool
+    # IRP6-only display hints: the provisional period marker ("01"/"02"/"03") and whether
+    # this is the voluntary third payment. Both are purely for labels — None/False on every
+    # other row — and never feed the overdue/open predicates.
+    window_code: str | None = None
+    is_voluntary: bool = False
 
 
 # --- Per-status action lists. These mirror the transition state graphs; a status with no
@@ -126,6 +131,7 @@ def from_obligation(instance: ObligationInstance, today: date) -> DashboardItem:
     # (ITR14, EMP501, future ITR12 — done at SUBMITTED) becomes terminal. Keyed on the
     # model's has_payment_leg via is_done, never on a specific obligation_type.
     actions = () if instance.is_done else _OBLIGATION_ACTIONS[status]
+    is_irp6 = instance.obligation_type is ObligationType.IRP6
     return DashboardItem(
         kind=KIND_OBLIGATION,
         id=instance.id,
@@ -140,6 +146,9 @@ def from_obligation(instance: ObligationInstance, today: date) -> DashboardItem:
         notes=instance.notes,
         actions=actions,
         reassignable=is_open,
+        # IRP6 carries its provisional period; window 03 is the optional top-up.
+        window_code=instance.window_code if is_irp6 else None,
+        is_voluntary=is_irp6 and instance.window_code == "03",
     )
 
 
