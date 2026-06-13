@@ -36,6 +36,9 @@ Excell files to be importes into PMS/
 .vscode/
 .idea/
 *.swp
-.claude/
+# Ignore local/personal Claude Code config, but track the shared project settings
+# (settings.json carries the team-wide ruff-format hook).
+.claude/*
+!.claude/settings.json
 Tools/
 drafts/
