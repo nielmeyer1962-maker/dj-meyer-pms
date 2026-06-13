@@ -342,10 +342,18 @@ def test_regenerate_emits_vat201_and_emp201_together(app):
         rows = _all_for_client(c.id)
         vat = [r for r in rows if r.obligation_type is ObligationType.VAT201]
         emp = [r for r in rows if r.obligation_type is ObligationType.EMP201]
-        # 12 monthly VAT201 (Cat C) + 12 monthly EMP201 in the 12-month window.
+        emp501 = [
+            r
+            for r in rows
+            if r.obligation_type
+            in (ObligationType.EMP501_INTERIM, ObligationType.EMP501_ANNUAL)
+        ]
+        # 12 monthly VAT201 (Cat C) + 12 monthly EMP201 in the 12-month window, plus the
+        # two PAYE-gated EMP501 reconciliations (interim + annual) for the current tax year.
         assert len(vat) == 12
         assert len(emp) == 12
-        assert result == RegenerateResult(added=24, updated=0, deleted=0)
+        assert len(emp501) == 2
+        assert result == RegenerateResult(added=26, updated=0, deleted=0)
 
 
 def test_regenerate_skips_emp201_when_not_paye_registered(app):
