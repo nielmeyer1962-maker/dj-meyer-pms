@@ -18,6 +18,7 @@ from app.extensions import db
 from app.models.client import Client
 from app.models.obligation import ObligationInstance, ObligationStatus, ObligationType
 from app.services.obligations.emp201 import generate_emp201
+from app.services.obligations.irp6 import generate_irp6
 from app.services.obligations.it12 import generate_it12
 from app.services.obligations.itr14 import generate_itr14
 from app.services.obligations.vat201 import generate_vat201
@@ -65,6 +66,10 @@ def regenerate(client: Client, today: date | None = None) -> RegenerateResult:
             *generate_emp201(client, today=today),
             *generate_itr14(client, today=today),
             *generate_it12(client, today=today),
+            # IRP6 self-gates on has_provisional_tax (returns [] otherwise), so a
+            # non-provisional client contributes no rows. The shared past-due-safe prune
+            # below protects lapsed PENDING IRP6 rows, including the voluntary 03.
+            *generate_irp6(client, today=today),
         )
     }
 
