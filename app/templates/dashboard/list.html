@@ -82,7 +82,11 @@
             {% if item.notes %}<span title="Has notes" aria-label="Has notes">📝</span>{% endif %}
           </td>
           <td>{{ item.client.legal_name if item.client else "—" }}</td>
-          <td>{{ item.type_label }}</td>
+          <td>
+            {{ item.type_label }}
+            {% if item.window_code %}<span class="badge bg-secondary" title="Provisional period {{ item.window_code }}">{{ item.window_code }}</span>{% endif %}
+            {% if item.is_voluntary %}<span class="badge bg-light text-dark border" title="Voluntary third / top-up payment">optional</span>{% endif %}
+          </td>
           <td>{{ item.period_label }}</td>
           <td>{{ item.due_date }}</td>
           <td>

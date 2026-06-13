@@ -11,6 +11,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    String,
     Text,
     UniqueConstraint,
     func,
@@ -29,19 +30,17 @@ class ObligationType(enum.Enum):
     EMP201 = "EMP201"
     ITR14 = "ITR14"
     ITR12 = "ITR12"
+    IRP6 = "IRP6"
 
     @property
     def has_payment_leg(self) -> bool:
         """True for obligations that are filed *and* paid (a payment leg), so "done"
         means PAID, not merely SUBMITTED. VAT201, EMP201 and IRP6 carry a payment leg;
-        everything else (e.g. EMP501, ITR14, CIPC annual return) is file-only. EMP201
-        and IRP6 are not yet enum members — the full map is encoded now so is_done is
-        correct the moment they are added."""
+        everything else (e.g. EMP501, ITR14, ITR12, CIPC annual return) is file-only."""
         return self.value in _PAYMENT_LEG_TYPES
 
 
-# Obligation types that have a payment leg (file + pay). Keyed by enum *value* so the
-# map already covers EMP201/IRP6 before those members are added to ObligationType.
+# Obligation types that have a payment leg (file + pay). Keyed by enum *value*.
 _PAYMENT_LEG_TYPES = frozenset({"VAT201", "EMP201", "IRP6"})
 
 
@@ -106,6 +105,9 @@ class ObligationInstance(db.Model):
         nullable=False,
     )
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # IRP6 provisional-tax period marker: "01" (first), "02" (second), "03" (voluntary
+    # third / top-up). Nullable because every other obligation type leaves it unset.
+    window_code: Mapped[str | None] = mapped_column(String(2), nullable=True)
 
     # Relationships (Python-only, no FK or schema change). selectinload these in
     # query-heavy paths like the dashboard list to avoid N+1.
