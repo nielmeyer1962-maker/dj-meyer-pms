@@ -30,7 +30,13 @@ seed.py
 *.xlsx
 *.xls
 *.csv
-Excell files to be importes into PMS/
+*.pdf
+Excell files to be imported into PMS/
+# Local SQL dumps (schema.sql + seed.sql with real client rows). Schema lives in
+# migrations/; force-add database/schema.sql if you ever want it tracked.
+/database/
+# Loose client-data drops in the repo root
+/Damian s Whatsup.txt
 
 # Editor
 .vscode/

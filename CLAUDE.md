@@ -121,13 +121,16 @@ app/
   config.py             Config class, reads env vars (SECRET_KEY, DATABASE_URL, MAIL_*).
   extensions.py         Singletons: db (SQLAlchemy), migrate, csrf.
   models/               Data layer — typed SQLAlchemy models + invariants.
-    client.py             Client, EntityType, VatCategory, VatSubmissionMethod.
-    obligation.py         ObligationInstance, ObligationType, ObligationStatus.
+    client.py             Client, EntityType (incl. INC), VatCategory, VatSubmissionMethod.
+    obligation.py         ObligationInstance, ObligationType (VAT201/EMP201/ITR14),
+                          ObligationStatus (PENDING/IN_PROGRESS/SUBMITTED/PAID/EXEMPT).
+    cipc.py               CIPCAnnualInstance, CIPCAnnualStatus (7-state AR/BO machine).
     task.py               Task, TaskStatus (ad-hoc client tasks).
     staff.py              Staff, StaffRole (TAX / SECRETARIAL / BOTH).
   services/             Business logic — NO Flask, pure functions, fully unit-tested.
     obligations/          predicates (overdue), transitions (state graph),
-                          vat201 (period/due-date generation), regenerate.
+                          vat201 / emp201 / itr14 (period/due-date generation), regenerate.
+    cipc/                 due_dates, fees, generate, predicates, regenerate, transitions.
     tasks/                predicates.
   <blueprint>/          Presentation layer — one folder per feature area:
     clients/              routes + forms     → URL prefix /clients
@@ -135,8 +138,9 @@ app/
     tasks/                routes + forms     → URL prefix /dashboard/tasks
   templates/            Jinja2 templates, grouped per blueprint.
   utils/                dates (today_sast), business_days, staff helpers.
-migrations/             Alembic migration history (6 revisions; latest = task table).
-tests/                  pytest suite mirroring the app tree (170 tests, all passing).
+migrations/             Alembic migration history (18 revisions; latest adds ITR14 +
+                        CIPC AR fee tables).
+tests/                  pytest suite mirroring the app tree (319 test functions).
 ```
 
 **Key design rules already established in the code (follow them):**
@@ -188,18 +192,27 @@ Production (per README): `gunicorn -w 4 "run:app"` behind nginx, `DEBUG=False`, 
 
 ## Current state (update as it changes)
 
+*Last reconciled 2026-06-17 against `main` @ `18b161e`. See `PROJECT_PLAN.md` →
+"Delivery status" for the per-ticket ledger.*
+
 - Branch `main`, tracking `origin/main` (GitHub: nielmeyer1962-maker/dj-meyer-pms).
-- Built so far: Client model + CRUD, Staff model, VAT201 obligation generation,
-  dashboard with filters + per-row actions (submit/paid/exempt/reassign/notes),
-  and the start of ad-hoc **Tasks** (Ticket 3g).
-- **In flight:** Ticket 3g Chunk 2 — task form / detail page. Working tree has uncommitted
-  changes in `app/tasks/routes.py`, the task templates, and `tests/tasks/test_routes.py`,
-  plus untracked `app/templates/tasks/form.html`.
+- **Built so far:** Client model + CRUD (incl. allocation, CIPC anniversary, and
+  structured contact fields), Staff model, ad-hoc **Tasks** CRUD (Ticket 3g), and a
+  unified deadline **dashboard** (filters: status / assignee / view / type / client;
+  per-row submit/in-progress/paid/exempt/reassign/notes), rendered through the pure
+  `DashboardItem` adapter that unifies obligations and CIPC rows.
+- **Obligation generators:** VAT201, EMP201 (Ticket 4e), ITR14 (Ticket 4a).
+  `ObligationStatus` is `PENDING → IN_PROGRESS → SUBMITTED → PAID` with `EXEMPT` off-ramp.
+- **CIPC Annual Return** (Ticket 4g) is a *separate* subsystem — `CIPCAnnualInstance`
+  with its own 7-state machine (`GENERATED → INVOICED → INVOICE_PAID → BO_SUBMITTED →
+  AR_SUBMITTED → CLOSED`, plus `DECLINED`), BO-before-AR ordering, and an entity-aware
+  fee reference table.
+- **Not yet built:** transition metadata (3d), AFS tracking (3f), multi-status / custom
+  date-range dashboard filters. ON_HOLD status remains deferred.
+- **Working tree:** clean of code changes (only untracked local data files present).
 
 ## Known issues / cleanup backlog
 
-- **Ruff is currently red** (2 errors) in the in-flight `tests/tasks/test_routes.py:18`
-  (`UP037` quoted annotation `-> "Staff"` + resulting `F821`). Resolve before committing 3g.
 - **Python version drift:** `.venv` runs 3.13 but `pyproject.toml` / ruff target 3.12.
   Either align the venv to 3.12 or bump the target deliberately.
 - **`gunicorn` is referenced in README deploy but not in `requirements.txt`** — add it.

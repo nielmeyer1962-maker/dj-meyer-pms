@@ -8,6 +8,46 @@ Replace the deadline-tracking and assignment work currently scattered across Zoh
 
 See `CLAUDE.md`. Do not build accounting, CRM, billing, or document management features in any phase before they are explicitly approved.
 
+## Delivery status
+
+*Last reconciled 2026-06-17 against `main` @ `18b161e`. This ledger records what has
+shipped; it is derived from git history, not a record of new design decisions. The
+per-ticket spec sections further down (3a, 3b, 3c, 3g) remain the authoritative
+"decisions locked in per Daniel" — newer tickets (Schema A/B, 4e, 4g, 4a) were built
+without full spec sections here and are summarised below from their commits.*
+
+**Shipped (on `main`):**
+
+| Ticket | What shipped | Key commits |
+|---|---|---|
+| 3a–3c | Client model + CRUD, Staff model, VAT201 generation, obligation transitions, OVERDUE predicate, dashboard with filters + per-row actions, regenerate-with-preservation, per-obligation detail page + `notes`. | (Phase 1 core) |
+| 3g | Ad-hoc client **Tasks** — `Task` model + migration (Chunk 1), `tasks` blueprint at `/dashboard/tasks` with list/detail/create/edit CRUD (Chunk 2). | `c4ee28a`…`0744d60` |
+| Schema A | Client **allocation** (engagement rep) + **CIPC anniversary** fields. | `5f6b0d8` |
+| Schema B | Structured client **contact** fields (later restructured). | `8e7caca`, `9766be8`, `dab2ef4` |
+| IN_PROGRESS | `ObligationStatus` gains **IN_PROGRESS**: `PENDING → IN_PROGRESS → SUBMITTED → PAID`, `EXEMPT` off-ramp. Adds `has_payment_leg` / `is_done`; `mark_in_progress` transition + dashboard wiring. | `f26ab78`, `6ce6578` |
+| 4e | **EMP201** (monthly employer declaration) generated obligation. | `859434e` |
+| 4g | **CIPC Annual Return** subsystem — separate `CIPCAnnualInstance` model + 7-state enum (`GENERATED → INVOICED → INVOICE_PAID → BO_SUBMITTED → AR_SUBMITTED → CLOSED`, plus `DECLINED`), `INC` entity type, `add_business_days()`, due-date rule, generator + parallel regenerate path, BO-before-AR state machine, entity-aware **fee reference table** + late-fee derivation. | `f12ea1b`…`4786b00`, `6ef22f3`, `4265144` |
+| Dashboard adapter | Pure **`DashboardItem` adapter** unifying obligation + CIPC rows; **Type** filter (VAT201 / EMP201 / CIPC AR) and **Client** filter. | `604f12f`, `a874f2b`, `504205f`, `556efbf` |
+| 4a | **ITR14** (company income tax) — obligation type + enum migration, forward business-day helper, generator for the most-recently-completed FY, wired into regenerate (prune is past-due-safe), file-only action set (terminal at SUBMITTED), detail page via the adapter. | `75fd362`…`957fc1f` |
+
+**Current totals:** 319 test functions; 18 Alembic migrations; obligation generators
+for VAT201, EMP201, ITR14; CIPC AR as a parallel subsystem; entity types include `INC`.
+
+**Divergences from the original plan, worth noting:**
+
+- **IN_PROGRESS shipped in Phase 1**, though §1.4 and the 3a/3b specs had deferred it
+  (along with ON_HOLD) to Phase 2. ON_HOLD is still deferred.
+- **CIPC Annual Return is a separate model** (`CIPCAnnualInstance` with its own 7-state
+  machine), not an `ObligationType.CIPC_ANNUAL` row as the Phase 1 obligation table
+  sketched. The dashboard reunifies them via the `DashboardItem` adapter.
+
+**Reserved tickets — status:**
+
+- **3d (transition metadata)** — not yet built.
+- **3e (dashboard filter polish)** — effectively delivered: Type + Client filters shipped
+  with the dashboard adapter work. Multi-status and custom date range still open.
+- **3f (AFS deadline tracking)** — not yet built.
+
 ## Phase 1 — MVP: Client and SARS Deadline Tracker
 
 ### Functional scope
