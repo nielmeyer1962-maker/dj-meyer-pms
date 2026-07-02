@@ -27,10 +27,13 @@ htmlcov/
 seed.py
 
 # Client data — never commit (POPIA). Raw client spreadsheets/exports stay on Y:\.
+# The whole client-data/ working directory is ignored, except its committed README.
+client-data/*
+!client-data/README.md
 *.xlsx
 *.xls
 *.csv
-Excell files to be importes into PMS/
+Excell files to be imported into PMS/
 
 # Editor
 .vscode/
