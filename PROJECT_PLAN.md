@@ -1366,3 +1366,163 @@ Per-client allocation. The accounting staff member assigned to the client files 
 - `OBJECTED` resolution: when the SARSDispute resolves, does the IT14 always return to a specific state with a deterministic rule, or is the next state genuinely workflow-dependent? Implementation-time call.
 - Auto-flipping `Client.sars_industry_code` from a confirmation step on first IT14 filing — deferred.
 
+- ## Ticket 4b — IT12 (individual annual income tax return)
+
+**Goal.** Track and surface the annual IT12 deadline for every individual client — including sole proprietors and partnership members — so no annual return slips past the SARS filing season closing date for the applicable filing category.
+
+**Scope discipline.** IT12 is an obligation type with its own model (`IT12Instance`), structurally parallel to IT14 in Ticket 4a. Same 6-state lifecycle, same architectural justification (assessment workflow, year-specific data, dispute link). Most of 4a's architecture transfers directly. PMS tracks the deadline and lifecycle status; tax calculation lives in the firm's tax software. IT12 *form preparation* is deferred to a future Ticket 8c (analogous to 8a for IT14).
+
+**Divergence from Ticket 3a.** As with 4a, the original 3a plan listed `ITR12` as a future value on the `ObligationType` enum. This ticket deliberately replaces that intent: IT12 gets its own table and its own status enum. Ratified in Decision 1 below.
+
+### Applicability rule
+
+Every individual client — entity type `INDIVIDUAL`, including those with sole-proprietor business income — files IT12. The firm files for every individual client regardless of SARS thresholds; threshold considerations are handled at SARS's side, not the firm's. No applicability flag on `Client` is needed; entity type drives generation.
+
+**Edge case (auto-assessment):** SARS sometimes auto-assesses individuals. When the firm reviews an auto-assessment and decides to accept it (rather than filing a different return), the `IT12Instance` transitions to `EXEMPT` with a note indicating "auto-assessment accepted". The `is_billable` flag distinguishes this operationally-unbillable (or reduced-fee) work from full IT12 filings — see Decision 10. Firm intends to introduce a reduced fee for auto-assessment review work, so `is_billable` may remain `True` under a different fee tier once that fee is in place.
+
+### Due-date rule
+
+IT12 has **two possible deadlines** depending on the client's provisional-taxpayer status:
+
+- **Non-provisional taxpayer** → earlier deadline (typically ~end of October of the following year)
+- **Provisional taxpayer** → later deadline (typically ~end of January of the year after that)
+
+The exact dates per year are published in SARS's annual filing season notice. They are captured in the `sars_filing_deadlines` reference table introduced in Ticket 4a, with these two relevant `SARSReturnType` values:
+
+- `IT12_NONPROVISIONAL` — for non-provisional taxpayers
+- `IT12_PROVISIONAL` — for provisional taxpayers
+
+Generator logic per individual client per YOA:
+
+```
+if client.is_provisional_taxpayer:
+    deadline = lookup(sars_filing_deadlines, yoa, IT12_PROVISIONAL)
+else:
+    deadline = lookup(sars_filing_deadlines, yoa, IT12_NONPROVISIONAL)
+
+if deadline is None:
+    # Firm hasn't entered this year's SARS notice yet.
+    # Fall back to a sensible default (year_end + 8 months for non-prov,
+    # year_end + 11 months for prov) as a placeholder, and flag on dashboard.
+
+apply business-day-roll-back (weekends + SA public holidays)
+```
+
+**Note:** Individual YOA is always calendar-aligned: 1 March to 28/29 February. No per-client year-end variation — unlike companies. Simplifies the generator significantly.
+
+### Generator behaviour
+
+The generator emits **one `IT12Instance` row per individual client per YOA**:
+
+```
+IT12Instance:
+  id                int PK
+  client_id         FK clients.id ON DELETE RESTRICT
+  yoa               int                     -- e.g., 2026 for YOA ending 28 Feb 2026
+  period_start      date                    -- always 1 March of (YOA - 1)
+  period_end        date                    -- always 28/29 Feb of YOA
+  due_date          date                    -- per the dual-deadline rule above,
+                                            --   business-day adjusted
+  status            IT12Status              -- new enum, default PENDING
+  is_billable       bool                    -- default True; generic across obligations
+  assessed_amount   Decimal | None          -- captured at ASSESSED state
+  paid_amount       Decimal | None          -- captured at PAID state (or refund in notes)
+  notes             Text | None
+  assignee_id       FK staff.id ON DELETE SET NULL
+  created_at, updated_at
+```
+
+- Composite uniqueness on `(client_id, yoa)`.
+- Composite index on `(status, due_date)` for the dashboard's overdue / due-soon queries.
+- Idempotency: re-running the generator at YOA boundary is safe.
+
+**Note on `IT12Status` enum:** Identical members to `IT14Status` from 4a (`PENDING`, `SUBMITTED`, `ASSESSED`, `PAID`, `OBJECTED`, `EXEMPT`). Whether to consolidate into a shared `AnnualReturnStatus` enum used by both models is deferred to implementation time — see Open questions.
+
+### Required source data
+
+To file an IT12 the firm needs:
+
+- The client's SARS Income Tax reference number (held on `Client`)
+- The client's ID number (held on `Client` for individuals)
+- IRP5s from employers (SARS pre-populates on eFiling)
+- IT3(a)/(b)/(c) certificates for investment income (SARS pre-populates)
+- Medical aid tax certificate (SARS pre-populates)
+- IT3(t) certificate if client is a trust beneficiary
+- For sole props: business income and expense statement
+- Manual entry: rental income, capital gains, foreign income, additional deductions (donations, retirement annuity contributions not on IRP5)
+
+PMS holds none of these figures. They live in the firm's tax software and in client documents on the Y drive. The IT12 form preparation work itself is Ticket 8c (future).
+
+### Status state machine
+
+Identical to 4a's IT14 lifecycle:
+
+```
+PENDING → SUBMITTED → ASSESSED → PAID
+                          ↘
+                        OBJECTED → (Ticket 6 SARSDispute takes over)
+
+PENDING / SUBMITTED → EXEMPT  (auto-assessment accepted, or SARS-confirmed non-filing)
+```
+
+Six states. Reversible per the service-layer-only philosophy established in Tickets 3g and 4d. Idempotent transitions raise `ValueError`.
+
+`OBJECTED` is a parking state — when a NOO is lodged the active workflow migrates to the `SARSDispute` model (future Ticket 6). When the dispute resolves, the IT12 returns to `ASSESSED` (possibly with an updated amount) or moves to `PAID`.
+
+Refunds: `PAID` is terminal. No separate `REFUND_DUE` / `REFUND_RECEIVED` states.
+
+### Staff allocation
+
+Per-client allocation. The accounting staff member assigned to the client files that client's IT12. Same allocation model as IT14 — not centralised to Tsego.
+
+### Out of scope
+
+- IT12 form preparation / population (Ticket 8c, future)
+- IT12 tax calculation
+- Direct SARS eFiling integration
+- IT3 / IRP5 auto-ingestion from SARS systems
+- Sole proprietor business-income statement preparation (firm's bookkeeping work, separate)
+- Trust beneficiary distribution data (lives in Trust model when Ticket 4c is built)
+- Auto-assessment evaluation workflow automation
+- SARS dispute / NOO tracking (Ticket 6)
+- Workload visibility / billable-hours reporting (Ticket 9)
+
+### Schema implications
+
+1. New table `it12_instances` per the schema above.
+2. New enum `IT12Status` (`PENDING`, `SUBMITTED`, `ASSESSED`, `PAID`, `OBJECTED`, `EXEMPT`). Consolidation into a shared `AnnualReturnStatus` deferred to implementation time.
+3. **Add `IT12_NONPROVISIONAL` and `IT12_PROVISIONAL` to the `SARSReturnType` enum** in the `sars_filing_deadlines` table introduced by Ticket 4a. Extends the shared reference table without new columns.
+4. **No new column on `Client` model for provisional-taxpayer flag.** Reuses `is_provisional_taxpayer` introduced in Ticket 4d for IRP6 obligations. The two workflows (IRP6 season, then IT12 season) are separate operational timeframes but the underlying factual flag is one and the same — a client either is or isn't a provisional taxpayer.
+5. **Add `has_sole_prop_business: bool` (NOT NULL, default `False`) to `Client` model.** Drives dashboard filtering to distinguish sole prop IT12s from pure-employee IT12s. Set at import time by the firm.
+6. **No BO involvement.** Individuals don't have beneficial owners; Ticket 7 (BO infrastructure) is not a dependency for 4b.
+
+### Decisions locked
+
+1. Separate `IT12Instance` model — parallel to `IT14Instance`. Ratifies divergence from 3a plan's ITR12-as-enum-value approach.
+2. Every individual client gets an IT12 obligation generated; no applicability flag needed.
+3. Due-date selection driven by `client.is_provisional_taxpayer` (same flag from Ticket 4d).
+4. Two SARS deadlines (`IT12_NONPROVISIONAL`, `IT12_PROVISIONAL`) captured in the shared `sars_filing_deadlines` table from 4a.
+5. Year-of-assessment is calendar-aligned for individuals; no per-client year-end calculation.
+6. Sole prop business income is filed within the IT12 (one IT12 per sole prop, with a business schedule).
+7. Per-client staff allocation (not centralised).
+8. PMS tracks deadline + lifecycle; form preparation work is Ticket 8c.
+9. `OBJECTED` parking state hands over to Ticket 6 `SARSDispute` model.
+10. Auto-assessment acceptance maps to `EXEMPT` status with `notes` indicating reason. Not a new status. `is_billable` flag distinguishes billing tier; firm intends to introduce a reduced fee for auto-assessment review, so `is_billable` may remain `True` under that fee tier once introduced.
+11. New `has_sole_prop_business: bool` flag on `Client` distinguishes sole-prop individuals from pure-employee individuals for dashboard filtering.
+12. Trust beneficiary linkage — when Ticket 4c is built, beneficiaries' IT12s will need to reference their trust(s) for IT3(t) ingestion. Cross-table relationship deferred to 4c; flagged here as a known future dependency.
+
+### Hard dependencies
+
+- **Ticket 4a (IT14)** — introduces the `sars_filing_deadlines` table and its admin UI. 4b extends the table with two new `SARSReturnType` enum values.
+- **Ticket 4d (IRP6)** — introduces `Client.is_provisional_taxpayer` flag which 4b reuses.
+- **Working-day calculation utility** — shared with Tickets 4a, 4d, 4e, 5a. Folded into whichever ships first.
+- **Ticket 8c (IT12 form work)** is a *future* dependency for actual filing automation, not a prerequisite for 4b itself.
+
+### Open questions for implementation time
+
+- **Shared vs separate `AnnualReturnStatus` enum** for 4a and 4b — both have identical members and identical transitions. Consolidating avoids duplication; keeping separate avoids coupling. Implementation-time decision.
+- **Auto-assessment automation** — when SARS issues an auto-assessment and firm reviews it, should there be a shortcut UI to "Accept auto-assessment" that transitions to `EXEMPT` in one click? Deferred until manual workflow is proven.
+- **Trust beneficiary linkage** — exact shape of the cross-table relationship (does an individual's IT12Instance reference the Trust directly, or via an intermediate `TrustBeneficiary` table?) — decided in Ticket 4c.
+- **Sole prop reporting on dashboard** — how prominently should sole-prop IT12s be distinguished from pure-employee IT12s (badge, filter, separate section)? Deferred to dashboard polish work.
+
+
