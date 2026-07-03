@@ -1224,7 +1224,7 @@ No DB CHECK constraint, no `before_update` listener — direct ORM writes remain
 12. **`description` is `Text` with form-layer soft cap 4000 chars** (matches `obligation_instances.notes`). No DB-level cap; the soft cap stops accidental megabyte pastes.
 13. **Composite index `ix_tasks_status_due_date` on `(status, due_date)`** — supports the OVERDUE / "due soon" read-time predicates and the future "OPEN tasks due in the next N days" list query.
 
-14. ## Ticket 4a — IT14 (company annual income tax return)
+## Ticket 4a — IT14 (company annual income tax return)
 
 **Goal.** Track and surface the annual IT14 deadline for every company and CC on the firm's books, so no annual return slips past the SARS filing season closing date. IT14 is the firm's highest-volume return (~300 instances per year at steady state).
 
