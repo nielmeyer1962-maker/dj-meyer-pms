@@ -1525,4 +1525,122 @@ Per-client allocation. The accounting staff member assigned to the client files 
 - **Trust beneficiary linkage** — exact shape of the cross-table relationship (does an individual's IT12Instance reference the Trust directly, or via an intermediate `TrustBeneficiary` table?) — decided in Ticket 4c.
 - **Sole prop reporting on dashboard** — how prominently should sole-prop IT12s be distinguished from pure-employee IT12s (badge, filter, separate section)? Deferred to dashboard polish work.
 
+- ## Ticket 4e — EMP201 (monthly employer tax declaration)
+
+**Goal.** Track and surface the monthly EMP201 submission deadlines for every PAYE-registered client, so no employer-tax filing slips past the 7th-of-the-following-month deadline.
+
+**Scope discipline.** EMP201 is an obligation type that **reuses the existing `ObligationInstance` model** — same monthly cadence and single-period shape as VAT201, no structural divergence to justify a separate model. Adds a new value to the `ObligationType` enum. The PMS tracks the deadline and submission/payment status only; it does not calculate PAYE, UIF, or SDL — those are computed in the firm's payroll software (SimplePay, Sage Payroll, Pastel Payroll) and lodged via SARS eFiling.
+
+**No divergence from Ticket 3a.** Unlike Tickets 4a, 4b, and 4d — which introduce separate models per obligation type — EMP201 is the case where the original 3a plan's design (one `obligation_instances` table + `ObligationType` enum value) is the *right* architecture. The monthly-cadence shape matches VAT201 exactly.
+
+### Applicability rule
+
+A client has EMP201 obligations if they are a registered employer with a SARS PAYE reference number. Requires a per-client flag `is_paye_registered: bool` on the `Client` model — same shape as the `is_provisional_taxpayer` flag added in Ticket 4d for IRP6.
+
+- Defaults: `False` for all imported clients; firm explicitly flips to `True` for clients who actually run payroll.
+- When Tsego completes a PAYE registration (via the SARS-registration task type on Ticket 3g's Task model), the PMS task-completion handler could suggest flipping `is_paye_registered = True`, but the flip itself remains a manual confirmation. Automation deferred to a future ticket.
+
+Clients flagged `is_paye_registered = False` get no EMP201 obligation instances generated.
+
+### Due-date rule
+
+Monthly cadence, fixed across all clients regardless of year-end. For each calendar month, the EMP201 declaring PAYE/UIF/SDL withheld in that month is due **on the 7th of the following month**, with business-day-roll-back for weekends and SA public holidays.
+
+| Period | Due date | Business-day rule |
+|---|---|---|
+| 1 March – 31 March | 7 April | If weekend or SA public holiday → preceding business day |
+| 1 April – 30 April | 7 May | Same |
+| (...every month...) | 7th of following month | Same |
+| 1 February – 28/29 February | 7 March | Same |
+
+**Note:** Same business-day-roll-back logic established in Ticket 4d (weekends + SA public holidays). The PMS holiday source decided in 4d's implementation ticket applies here too — single shared dependency.
+
+### Generator behaviour
+
+The generator emits **one `ObligationInstance` row per PAYE-registered client per calendar month**. Within an existing YOA, generation is typically done in batches at month-start or at YOA rollover.
+
+```
+ObligationInstance for EMP201 (March 2026, example client):
+  client_id        FK clients.id ON DELETE RESTRICT
+  obligation_type  ObligationType.EMP201       -- new enum value added by this ticket
+  period_start     2026-03-01
+  period_end       2026-03-31
+  due_date         2026-04-07                  -- or preceding business day if 7 April
+                                               --   is weekend or SA public holiday
+  status           ObligationStatus.PENDING
+  is_billable      True                        -- generic obligation flag from Ticket 4a
+  assignee_id      FK staff.id ON DELETE SET NULL
+                                               --   (per-client allocation)
+```
+
+Composite uniqueness on `(client_id, obligation_type, period_start, period_end)` — same as VAT201, no new constraint needed.
+
+**Nil filings:** A PAYE-registered employer with zero payroll in a given month still files a Nil EMP201. The PMS generates the instance regardless — the firm marks it `SUBMITTED` (and `PAID` with R0) when filed. Whether to extend the status enum with a distinct `SUBMITTED_NIL` value to distinguish "filed nil" from "filed with tax due and paid" is the same question flagged in Ticket 4d for IRP6. **Deferred to a future consolidated Nil-filing handling ticket** covering VAT201, EMP201, and IRP6 together.
+
+### Required source data
+
+To file an EMP201, the firm (or client) needs:
+
+- Client's SARS PAYE reference number (already in Client model)
+- Calculated PAYE total for the month (from payroll software)
+- Calculated UIF total for the month (1% employee + 1% employer)
+- Calculated SDL total for the month (1% of payroll, only if annual payroll > R500k)
+
+PMS holds none of these calculation outputs. PMS holds the deadline and the submission/payment status.
+
+### Status state machine
+
+The existing `ObligationStatus` (`PENDING`, `SUBMITTED`, `PAID`, `EXEMPT`) is sufficient as-is:
+
+- `PENDING` — generated, not yet submitted
+- `SUBMITTED` — declaration lodged on SARS eFiling
+- `PAID` — payment cleared (PAYE + UIF + SDL, single payment to SARS)
+- `EXEMPT` — rare; e.g., SARS-accepted dormancy mid-year
+
+No state machine change needed for this ticket. The Nil-filing distinction is deferred per the note above.
+
+### Staff allocation
+
+Per-client allocation. The accounting staff member assigned to the client files that client's EMP201s. Same allocation model as VAT201, IT14, IT12, IRP6 — **not** centralised to Tsego.
+
+### Out of scope
+
+- PAYE/UIF/SDL calculation (lives in payroll software)
+- Direct SARS eFiling integration for submission
+- Direct integration with SimplePay/Sage/Pastel for headcount + payroll figures
+- Penalty / interest calculation for late filing
+- The `SUBMITTED_NIL` status enhancement (deferred to consolidated Nil-filing ticket alongside VAT201 and IRP6)
+- EMP501 reconciliation (Ticket 4f)
+- IRP5 issuance (linked to EMP501, covered in Ticket 4f)
+- Auto-flipping `Client.is_paye_registered = True` on PAYE-registration task completion
+
+### Schema implications
+
+This ticket requires:
+
+1. **Add `is_paye_registered: bool` (NOT NULL, default `False`) to `Client` model.** Same shape as the `is_provisional_taxpayer` field from Ticket 4d.
+2. **Add `EMP201` to the `ObligationType` enum.** Migration alters the enum (PostgreSQL `ALTER TYPE ... ADD VALUE`).
+3. **No new tables or new columns on `ObligationInstance`.** EMP201 fits the existing shape.
+
+### Decisions locked
+
+1. EMP201 reuses `ObligationInstance` — no separate model. Same monthly shape as VAT201. No divergence from Ticket 3a's original design.
+2. Applicability driven by new `Client.is_paye_registered` boolean.
+3. Deadline = 7th of following month, with business-day-roll-back for weekends and SA public holidays (shared rule with IRP6, Tickets 4a and 4b).
+4. Per-client staff allocation, not centralised.
+5. Nil-filing UI/status distinction deferred to a consolidated future ticket covering VAT201, EMP201, and IRP6.
+6. PMS tracks deadline + submission + payment status; does not calculate amounts.
+7. `is_billable` flag on the obligation instance follows the generic default `True` established in Ticket 4a.
+
+### Hard dependencies
+
+- **Working-day calculation utility** with SA public holiday awareness — shared infrastructure with Tickets 4a, 4b, 4d, 5a. Folded into whichever ships first.
+
+### Open questions for implementation time
+
+- **Coupling with EMP501.** EMP501 (Ticket 4f) reconciles all the year's EMP201s. When EMP501 is filed and SARS issues corrections, do the underlying EMP201s ever get re-submitted / amended in the PMS? Likely yes. Worth handling alongside 4f rather than here.
+- **PAYE registration timing.** When a client newly registers for PAYE mid-year, do we backfill the EMP201 obligations for the months prior to registration, or only generate going forward? Assumption: only going forward. Confirm at implementation time.
+- **Turnover-driven SDL applicability** — SDL is only owed if annual payroll exceeds R500k. Does the PMS need to model this threshold, or is it implicit in the PAYE registration decision? Deferred; likely no PMS modelling needed since payroll software handles the calculation.
+
+
 
