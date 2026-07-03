@@ -1248,3 +1248,121 @@ SARS filing season override is *always* earlier than the 12-month default (never
 
 The generator emits **one `IT14Instance` row per company/CC client per year of assessment**:
 
+```
+IT14Instance:
+  id                int PK
+  client_id         FK clients.id ON DELETE RESTRICT
+  yoa               int                    -- e.g., 2026 for YOA ending 28 Feb 2026
+  period_start      date                   -- first day of YOA (= client's year-start)
+  period_end        date                   -- last day of YOA  (= client's year-end)
+  due_date          date                   -- per the rule above, business-day adjusted
+  status            IT14Status             -- new enum, default PENDING
+  is_billable       bool                   -- default True; generic across obligations
+  industry_code     str(5) | None          -- captured per instance for historical record
+  profit_code       str | None             -- SARS-year-specific classification
+  assessed_amount   Decimal | None         -- captured at ASSESSED state
+  paid_amount       Decimal | None         -- captured at PAID state
+  notes             Text | None
+  assignee_id       FK staff.id ON DELETE SET NULL
+  created_at, updated_at
+```
+
+- Composite uniqueness on `(client_id, yoa)`.
+- Composite index on `(status, due_date)` for the dashboard's overdue / due-soon queries.
+- Idempotency: re-running the generator at YOA boundary is safe.
+
+### Required source data
+
+To file an IT14 the firm needs:
+
+- The client's SARS Income Tax reference number (held on `Client`)
+- The AFS (Balance Sheet and Income Statement line items mapped to IT14 fields)
+- The SARS industry source code for the client's primary business activity
+- A SARS profit code (year-specific)
+- Beneficial Ownership data, sourced from the shared BO infrastructure (Ticket 7) — same data the CIPC BO declaration uses, single dataset feeding two downstream forms
+
+PMS holds the reference numbers and the lifecycle status. The AFS-prepared work happens off-PMS (CaseWare). Form population work is Ticket 8a.
+
+**AFS-prepared is workflow, not state.** The IT14Instance sits at `PENDING` until filed; the AFS prep happens in CaseWare. A future enhancement could add a flag `afs_prepared_at: DateTime | None` for reporting on "AFS done but IT14 not yet filed" backlog, but it is out of scope here.
+
+### Status state machine
+
+```
+PENDING → SUBMITTED → ASSESSED → PAID
+                          ↘
+                        OBJECTED → (Ticket 6 SARSDispute model takes over)
+
+PENDING / SUBMITTED → EXEMPT  (rare: SARS-confirmed dormancy or deregistration in progress)
+```
+
+Six states. Reversible per the service-layer-only philosophy established in Ticket 3g and Ticket 4d. Idempotent transitions raise `ValueError`.
+
+`OBJECTED` is a *parking state* — when a NOO is lodged the active workflow migrates to the `SARSDispute` model (future Ticket 6). When the dispute resolves, the IT14 returns to `ASSESSED` (possibly with an updated amount) or moves to `PAID`.
+
+Refunds: when SARS issues a refund (assessed amount lower than provisional payments), `PAID` is still the terminal state. No separate `REFUND_DUE` / `REFUND_RECEIVED` states.
+
+### Staff allocation
+
+Per-client allocation. The accounting staff member assigned to the client files that client's IT14. **Not** centralised to Tsego (despite the BO data overlap — Tsego handles CIPC's BO declaration through Ticket 4g, the per-client allocated staff handles the IT14's BO section using the same source data).
+
+### Out of scope
+
+- IT14 tax calculation (lives in tax software)
+- Direct SARS eFiling integration for submission or assessment retrieval (manual filing)
+- Direct CaseWare AFS workflow integration
+- IT12 (Ticket 4b), Trust returns (Ticket 4c), EMP501 (Ticket 4f)
+- IT14 form preparation / population (Ticket 8a)
+- Skills / co-worker auto-population from uploaded AFS (Ticket 8b)
+- Profit code SARS-side lookup automation
+- SARS dispute / NOO tracking (Ticket 6)
+- Workload visibility / billable-hours reporting (Ticket 9)
+
+### Schema implications
+
+1. New table `it14_instances` per the schema above.
+2. New enum `IT14Status` (`PENDING`, `SUBMITTED`, `ASSESSED`, `PAID`, `OBJECTED`, `EXEMPT`).
+3. New table `sars_filing_deadlines` (introduced here, reused by Tickets 4b and 4f):
+
+   ```
+   sars_filing_deadlines:
+     yoa                int                  -- year of assessment
+     return_type        Enum SARSReturnType  -- IT12_NONPROVISIONAL, IT12_PROVISIONAL,
+                                             --   IT14, EMP501_INTERIM, EMP501_FINAL
+     deadline_date      date                 -- the SARS-published date
+     source_notice      str(200) | None      -- e.g., "Gov. Gazette 51234 of 7 June 2026"
+     captured_at        DateTime
+     captured_by_id     FK staff.id ON DELETE SET NULL
+     PRIMARY KEY (yoa, return_type)
+   ```
+
+4. Small admin UI at `/admin/sars-deadlines/` for principals (Niel, Jeanne-Marie) to enter the five published dates per year.
+5. New table `sars_industry_codes` — firm-uploadable lookup providing validation and descriptions for the 5-digit SARS industry codes. Per-client codes still stored on `Client.sars_industry_code` (a string); the lookup table provides validation.
+6. Add `sars_industry_code: str(5) | None` to `Client` model.
+
+### Hard dependencies
+
+- **Ticket 7 — BO infrastructure** must exist before the IT14's BO section can be populated. The 4a model can be built without BO and the BO consumption is wired in when 7 ships.
+- **Working-day calculation utility** with SA public holiday awareness — shared infrastructure with Tickets 4d, 4e, 5a. Folded into whichever of those tickets ships first.
+
+### Decisions locked
+
+1. Separate `IT14Instance` model — not folded into `ObligationInstance`. Ratifies divergence from 3a plan's ITR14-as-enum-value approach.
+2. Applicability is automatic for entity types `PTY_LTD`, `CC`, `NPC`, `INC` — no flag needed.
+3. Due-date = `min(year_end + 12 months, SARS published IT14 date)` with business-day-roll-back.
+4. SARS season override is *always* earlier (never later); formula simplifies accordingly.
+5. Per-client staff allocation (not centralised to Tsego).
+6. AFS preparation is workflow, not a tracked state — implicit via `PENDING` until filed.
+7. BO data is shared with CIPC declaration via Ticket 7 — single source dataset.
+8. PMS tracks deadline + lifecycle status; does not calculate tax.
+9. `OBJECTED` is a parking state — workflow migrates to Ticket 6 `SARSDispute` model.
+10. `is_billable: bool` flag on every obligation instance (generic addition introduced here, default `True`).
+11. Six-state machine; refunds map to `PAID` terminal.
+12. `sars_filing_deadlines` reference table is introduced by this ticket and shared with Tickets 4b and 4f.
+13. Industry code source is a firm-uploadable lookup table (`sars_industry_codes`); per-client code on `Client.sars_industry_code`.
+
+### Open questions for implementation time
+
+- Profit code: does the firm look this up per IT14 at SARS, or is it usually stable year-over-year for a given client? Determines whether to add a `Client.default_profit_code` field.
+- `OBJECTED` resolution: when the SARSDispute resolves, does the IT14 always return to a specific state with a deterministic rule, or is the next state genuinely workflow-dependent? Implementation-time call.
+- Auto-flipping `Client.sars_industry_code` from a confirmation step on first IT14 filing — deferred.
+
