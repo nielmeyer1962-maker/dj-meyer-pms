@@ -1223,3 +1223,28 @@ No DB CHECK constraint, no `before_update` listener — direct ORM writes remain
 11. **`requested_by` is `String(120)` with form-layer cap 120.** Name-length-ish — fits a typed-in person name or "Reception" without truncation.
 12. **`description` is `Text` with form-layer soft cap 4000 chars** (matches `obligation_instances.notes`). No DB-level cap; the soft cap stops accidental megabyte pastes.
 13. **Composite index `ix_tasks_status_due_date` on `(status, due_date)`** — supports the OVERDUE / "due soon" read-time predicates and the future "OPEN tasks due in the next N days" list query.
+
+14. ## Ticket 4a — IT14 (company annual income tax return)
+
+**Goal.** Track and surface the annual IT14 deadline for every company and CC on the firm's books, so no annual return slips past the SARS filing season closing date. IT14 is the firm's highest-volume return (~300 instances per year at steady state).
+
+**Scope discipline.** IT14 is an obligation type with its own model (`IT14Instance`), not folded into `ObligationInstance`. Justified by: richer status lifecycle including SARS assessment, per-instance year-specific data (industry code, profit code), link to the firm's AFS preparation work, and downstream interaction with disputes (future Ticket 6). PMS tracks the deadline and lifecycle status only. Tax calculation lives in the firm's tax software. IT14 *form preparation* is deferred to Ticket 8a; Skills/co-worker auto-population from uploaded AFS files is deferred to Ticket 8b.
+
+**Divergence from Ticket 3a.** The original 3a plan listed `ITR14` as a future value on the `ObligationType` enum in the shared `obligation_instances` table. This ticket deliberately replaces that intent: IT14 gets its own table and its own status enum. The divergence is ratified in Decision 1 below.
+
+### Applicability rule
+
+Every company and CC files IT14. Entity type `PTY_LTD`, `CC`, `NPC`, or `INC` directly implies an IT14 obligation. Dormant entities are reported *in* the IT14, not exempted from filing it. No applicability flag on `Client` is required. Edge case: entities undergoing CIPC deregistration can move to `EXEMPT` on a per-instance basis when SARS confirms.
+
+### Due-date rule
+
+IT14 due date is `min(client.year_end + 12 months, SARS filing season close for IT14)` with business-day-roll-back for weekends and SA public holidays.
+
+The SARS filing-season close date is captured per YOA in a new `sars_filing_deadlines` reference table (introduced by this ticket and reused by future Tickets 4b and 4f). If no row exists for the (YOA, IT14) tuple, the generator uses `year_end + 12 months` as the default and flags this visually on the dashboard so the firm knows the SARS notice hasn't been entered yet.
+
+SARS filing season override is *always* earlier than the 12-month default (never later). Formula simplifies accordingly.
+
+### Generator behaviour
+
+The generator emits **one `IT14Instance` row per company/CC client per year of assessment**:
+
