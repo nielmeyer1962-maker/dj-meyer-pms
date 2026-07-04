@@ -1941,6 +1941,241 @@ When a query is created, the assignee defaults to the staff member already alloc
 - **NOO / SARS dispute linkage.** When a query fails and an additional assessment happens, the firm lodges a NOO. That NOO becomes a Ticket 6 `SARSDispute` record. Should the `SARSQuery` carry a nullable `escalated_to_dispute_id` FK, or is the linkage the other direction (`SARSDispute` references originating `SARSQuery`)? Decided at Ticket 6 draft time.
 - **21-working-day count from `received_at` vs SARS-side "correspondence issued" date.** The 21-day SARS clock actually starts from the day SARS issued the correspondence, not when Niel logged it in the PMS. If Niel logs an SMS several days late, the PMS deadline would be wrongly generous. Options: (a) add a separate `sars_issued_at` field for the true SARS-side date; (b) accept the small slippage and rely on Niel to log promptly. Deferred.
 
+- ## Ticket 4g — CIPC annual filings and beneficial-ownership tracking
+
+**Goal.** Track and surface the annual CIPC obligations for every company and CC on the firm's books — Annual Return (AR) plus the Beneficial Ownership (BO) declaration that must precede it — with lead-time visibility for Tsego, invoice-paid gating, and a turnover-tiered fee schedule. In parallel, track ad-hoc BO updates triggered by director/shareholder changes outside the annual cycle.
+
+**Scope discipline.** CIPC filings are the operational heart of Tsego's centralised work. Two structurally distinct concepts are introduced in this ticket:
+
+1. **Annual CIPC filing** — recurring, anniversary-triggered, bundles BO + AR into one workflow with an invoice-paid gate
+2. **Ad-hoc BO update** — event-driven, triggered by real-world director or shareholder changes, has its own statutory deadline clock
+
+Both are centralised to Tsego, both consume the shared BO data infrastructure from Ticket 7, both live in the same operational area of the PMS. The PMS tracks deadlines, workflow status, and fee amounts — it does not file to CIPC (manual filing on the CIPC portal).
+
+**Divergence from Ticket 3a.** The 3a plan listed `CIPC_AR` as a future value on the `ObligationType` enum. This ticket deliberately replaces that intent: CIPC gets its own tables and its own status enums because (a) the invoice-paid gate is unique to CIPC (tax obligations file first, invoice after), (b) turnover-tiered fees need per-instance capture, (c) BO precedes AR is a hard filing dependency the shared model can't express, and (d) ad-hoc BO updates are a genuinely new event-driven concept with no analogue in the current enum. Ratified in Decision 1 below.
+
+### Applicability rule
+
+- **Annual CIPC filing** applies to every company and CC — entity type `PTY_LTD`, `CC`, `NPC`, or `INC`. Not applicable to individuals, sole props, trusts, or partnerships. No applicability flag on `Client` required; entity type drives generation.
+- **Ad-hoc BO update** applies only when a real-world triggering event happens (director joined, director left, shareholder change, address change materially affecting BO). Event-driven, no generation.
+
+**Edge case:** entities in CIPC deregistration are exempt from further annual filings once CIPC confirms. Firm marks the annual filing `EXEMPT` on a per-instance basis.
+
+### Operational context
+
+Tsego runs all CIPC work centrally. The workflow she operates:
+
+1. **60 days before anniversary** — PMS surfaces the upcoming annual filing on her dashboard so she can invoice the client
+2. Client pays the invoice (checked in QuickBooks; PMS records the fact manually)
+3. Tsego files BO declaration on CIPC portal
+4. Tsego files AR on CIPC portal (cannot happen before BO)
+5. Fee paid to CIPC from the client's invoiced amount
+6. Filing closed
+
+Annual return deadline is 30 days after the end of the anniversary month. So an entity incorporated 14 March has an anniversary month of March, period-end 31 March, deadline 30 April. Total window from PMS surfacing to hard deadline is ~90 days.
+
+### Annual filing — schema (`cipc_annual_filings`)
+
+```
+CIPCAnnualFiling:
+  id                   int PK
+  client_id            FK clients.id ON DELETE RESTRICT
+  filing_year          int                          -- calendar year of the anniversary
+  anniversary_month    int                          -- copied from client at generation
+                                                    --   time so future year-end shifts
+                                                    --   don't retroactively move deadlines
+  anniversary_day      int                          -- likewise
+  surface_date         date                         -- anniversary − 60 days
+  due_date             date                         -- last day of anniversary month + 30 days
+                                                    --   (calendar days, no business-day roll)
+  status               CIPCFilingStatus             -- new enum, default GENERATED
+  is_billable          bool                         -- default True; generic obligation flag
+  invoice_number       str(32) | None               -- Tsego records the firm's invoice number
+                                                    --   when she raises it
+  invoice_paid_at      DateTime | None              -- when Tsego confirms QuickBooks shows paid
+  bo_submitted_at      DateTime | None              -- BO declaration filed on CIPC
+  ar_submitted_at      DateTime | None              -- AR filed on CIPC (must be >= bo_submitted_at)
+  turnover_band        Enum TurnoverBand            -- copied from Client at generation time
+                                                    --   so historical fee amounts don't change
+                                                    --   when turnover band later moves
+  fee_paid_amount      Decimal | None               -- captured when Tsego pays CIPC
+  notes                Text | None
+  assignee_id          FK staff.id                  -- defaults to Tsego's staff record
+                                                    --   ON DELETE SET NULL
+  created_at, updated_at
+```
+
+Composite uniqueness on `(client_id, filing_year)`.
+Composite index on `(status, due_date)` for the dashboard's overdue / due-soon queries.
+Composite index on `(status, surface_date)` for the "upcoming filings for Tsego" view.
+
+### Fee schedule (turnover-tiered)
+
+| Annual turnover | On-time fee | Late fee |
+|---|---|---|
+| Less than R1 million | R100 | R150 |
+| R1m – less than R10m | R450 | R600 |
+| R10m – less than R25m | R2 000 | R2 500 |
+| R25m and above | R3 000 | R4 000 |
+
+The PMS reads the `turnover_band` on the `CIPCAnnualFiling` instance and looks up the fee from a static `cipc_fee_schedule` reference table. Both the on-time and late amounts are surfaced on the detail page — Tsego can see "if filed today R450, if missed R600" at a glance, driving prioritisation.
+
+### Turnover band on Client
+
+New field `Client.annual_turnover_band` (Enum: `UNDER_1M`, `UNDER_10M`, `UNDER_25M`, `AT_LEAST_25M`, default `UNDER_1M`). Tsego updates this manually when a client's turnover shifts across a band boundary. The value is *copied to the `CIPCAnnualFiling` instance at generation time* so historical fee amounts remain stable even when `Client.annual_turnover_band` later moves.
+
+### Annual filing — state machine
+
+```
+GENERATED → INVOICED → INVOICE_PAID → BO_SUBMITTED → AR_SUBMITTED → CLOSED
+
+Any state → EXEMPT (rare: CIPC deregistration confirmed by CIPC)
+```
+
+Six primary states plus `EXEMPT`. Reversible per the service-layer-only philosophy established in Tickets 3g, 4a, 4d. Idempotent transitions raise `ValueError`.
+
+The BO-precedes-AR dependency is enforced at the transition layer: `BO_SUBMITTED → AR_SUBMITTED` is the only path into `AR_SUBMITTED`. Attempting to transition to `AR_SUBMITTED` from any other state raises.
+
+### Ad-hoc BO update — schema (`cipc_bo_updates`)
+
+Structurally similar to the `SARSQuery` model from Ticket 5a — event-driven, has its own deadline clock, has its own state machine.
+
+```
+CIPCBOUpdate:
+  id                   int PK
+  client_id            FK clients.id ON DELETE RESTRICT
+  triggering_event     Enum BOTriggerEvent          -- DIRECTOR_JOINED, DIRECTOR_LEFT,
+                                                    --   SHAREHOLDER_CHANGE, ADDRESS_CHANGE,
+                                                    --   OTHER
+  event_date           date                         -- real-world date of the change
+  received_at          DateTime                     -- when Tsego learned of the change
+                                                    --   (either from firm contact updates
+                                                    --   or client directly)
+  due_date             date                         -- event_date + statutory window
+                                                    --   (defaulted to +10 business days;
+                                                    --   confirm the exact number with Tsego
+                                                    --   at implementation time)
+  status               CIPCBOUpdateStatus           -- RECEIVED, IN_PROGRESS, SUBMITTED, CLOSED
+  is_billable          bool                         -- default True
+  description          Text                         -- what changed and details
+  notes                Text | None                  -- working notes
+  assignee_id          FK staff.id                  -- defaults to Tsego
+                                                    --   ON DELETE SET NULL
+  created_at, updated_at
+```
+
+Composite index on `(status, due_date)` for overdue / due-soon dashboard views.
+
+### Ad-hoc BO update — state machine
+
+```
+RECEIVED → IN_PROGRESS → SUBMITTED → CLOSED
+```
+
+Four states. Reversible. Idempotent transitions raise.
+
+### Trigger channel for ad-hoc BO updates
+
+Tsego learns of triggering events through two channels, both manual:
+
+1. **Firm's own contact-record updates** — when a staff member updates a client's director or shareholder list in the PMS, a nudge should surface for Tsego to consider whether an ad-hoc BO update is required. (Automation of this nudge is deferred to a future ticket — for 5a-scope this is a manual awareness on Tsego's part.)
+2. **Client informing Tsego directly** — client phones/emails with the news. Tsego creates the `CIPCBOUpdate` record manually.
+
+Both channels flow into the same `CIPCBOUpdate` record. Manual entry in this ticket.
+
+### Dashboard placement
+
+CIPC filings are Tsego's operational core. They deserve dedicated dashboard sections:
+
+- **"Upcoming CIPC filings" section** — annual filings where `surface_date <= today AND status < BO_SUBMITTED`, sorted by `due_date` ascending. Overdue filings visually flagged in red.
+- **"Ad-hoc BO updates — open" section** — `CIPCBOUpdate` rows where `status != CLOSED`, sorted by `due_date`. Overdue visually flagged.
+- Both sections appear on Tsego's main dashboard. Other staff see them optionally (they belong to Tsego, but visibility is not restricted).
+
+### Routes
+
+**Annual filings:**
+- `GET /dashboard/cipc/filings/` — list all
+- `GET /dashboard/cipc/filings/<id>` — detail
+- `POST /dashboard/cipc/filings/<id>/transition` — status change (validates BO-precedes-AR)
+- `POST /dashboard/cipc/filings/<id>/edit` — update editable fields
+
+**Ad-hoc BO updates:**
+- `GET /dashboard/cipc/bo-updates/` — list all
+- `GET /dashboard/cipc/bo-updates/new` — new-update form
+- `POST /dashboard/cipc/bo-updates/new` — create
+- `GET /dashboard/cipc/bo-updates/<id>` — detail
+- `POST /dashboard/cipc/bo-updates/<id>/edit` — update
+- `POST /dashboard/cipc/bo-updates/<id>/transition` — status change
+
+### Required source data
+
+For annual filings:
+- Client's CIPC registration number (already on `Client`)
+- Client's incorporation anniversary date (already on `Client`, or derivable from registration date)
+- Client's beneficial ownership data (from Ticket 7 infrastructure)
+- Client's current turnover band (from `Client.annual_turnover_band`)
+- Firm's invoice number (Tsego enters manually)
+- QuickBooks invoice-paid status (Tsego checks manually and marks in PMS)
+
+For ad-hoc BO updates:
+- Details of the triggering event (Tsego enters manually)
+- Updated BO data (from Ticket 7 infrastructure)
+
+### Staff allocation
+
+**Centralised to Tsego for both annual filings and ad-hoc BO updates.** Diverges from the per-client allocation model used for tax obligations (VAT201, IT14, IT12, IRP6, EMP201, EMP501). All CIPC work belongs to Tsego regardless of which accounting staff member runs the client for tax purposes.
+
+### Out of scope
+
+- Direct CIPC portal API integration for filing (manual filing)
+- Direct QuickBooks integration for invoice-paid status (Tsego marks manually)
+- Fee payment tracking beyond the amount (CIPC-portal payment mechanics are out of scope)
+- Automation nudge from contact-record updates → `CIPCBOUpdate` creation (deferred)
+- New CIPC registrations (handled by Tsego as ad-hoc tasks via the `Task` model from Ticket 3g)
+- CIPC amendments — director appointment forms, name changes, MOI updates outside BO scope (Task model)
+- SARS registration tasks — VAT, PAYE, Income Tax (Task model)
+- Workmen's Compensation and RMA annual returns (Ticket 4h)
+
+### Schema implications
+
+1. **New table `cipc_annual_filings`** per the schema above.
+2. **New table `cipc_bo_updates`** per the schema above.
+3. **New enum `CIPCFilingStatus`** — `GENERATED`, `INVOICED`, `INVOICE_PAID`, `BO_SUBMITTED`, `AR_SUBMITTED`, `CLOSED`, `EXEMPT`.
+4. **New enum `CIPCBOUpdateStatus`** — `RECEIVED`, `IN_PROGRESS`, `SUBMITTED`, `CLOSED`.
+5. **New enum `BOTriggerEvent`** — `DIRECTOR_JOINED`, `DIRECTOR_LEFT`, `SHAREHOLDER_CHANGE`, `ADDRESS_CHANGE`, `OTHER`.
+6. **New enum `TurnoverBand`** — `UNDER_1M`, `UNDER_10M`, `UNDER_25M`, `AT_LEAST_25M`.
+7. **Add `annual_turnover_band: TurnoverBand` (NOT NULL, default `UNDER_1M`) to `Client` model.**
+8. **New reference table `cipc_fee_schedule`** — small static lookup keyed by `TurnoverBand` returning on-time and late fees. Seeded at migration time with the current fee schedule.
+
+### Decisions locked
+
+1. Two separate models — `CIPCAnnualFiling` (recurring) and `CIPCBOUpdate` (event-driven). Ratifies divergence from 3a's CIPC_AR-as-enum-value approach.
+2. Single annual filing per (client, year) bundles BO + AR into one workflow with BO-precedes-AR enforced at the transition layer.
+3. 60-day surface lead time (`surface_date = anniversary − 60 days`); ~90-day total window before hard deadline.
+4. Turnover band on `Client` (manual, Tsego-maintained), copied to each `CIPCAnnualFiling` instance at generation time so historical fee amounts remain stable.
+5. Fee schedule (turnover-tiered, on-time vs late) held in a static `cipc_fee_schedule` reference table.
+6. Six-state annual filing machine plus `EXEMPT`; four-state BO update machine.
+7. Both concepts centralised to Tsego (defaults for `assignee_id`). Diverges from per-client allocation used elsewhere.
+8. Deadline uses calendar days, not business days — no business-day-roll-back (CIPC's deadline is calendar-based, unlike SARS deadlines).
+9. Invoice-paid gate is CIPC-only (not applied to tax obligations). Manual status flag set by Tsego after checking QuickBooks.
+10. Ad-hoc BO update model is structurally parallel to `SARSQuery` (5a) — event-driven, own deadline clock, own state machine.
+11. Trigger channel for BO updates is manual entry (firm's contact updates OR client informing Tsego). Automation deferred.
+12. `is_billable` flag on both models follows the generic default `True` established in Ticket 4a.
+
+### Hard dependencies
+
+- **Ticket 7 — BO infrastructure** must exist before either model in this ticket can populate BO data. `CIPCAnnualFiling.status = BO_SUBMITTED` and `CIPCBOUpdate` records both consume the shared BO dataset.
+
+### Open questions for implementation time
+
+- **Exact statutory window for ad-hoc BO updates.** The default in the schema is +10 business days from event date. Confirm the exact rule with Tsego at implementation.
+- **Automation nudge on contact-record updates.** When a staff member changes a client's director or shareholder list, should the PMS auto-suggest creating a `CIPCBOUpdate`? Deferred to a future ticket; for 4g the flow is manual awareness on Tsego's part.
+- **Historical filing years import.** How many prior years of CIPC filings should be imported when the PMS goes live? Or only new filings from go-live date forward? Deferred to import-planning phase.
+- **CIPC amendments (director appointments, name changes, MOI updates outside BO scope).** These are Tsego's work but not covered by 4g. They land as `Task` records under Ticket 3g. Whether they warrant their own model in a future ticket is deferred until pattern emerges.
+- **New CIPC registrations.** Same treatment — handled as `Task` records for now. Future ticket if volume/complexity justifies.
+- **Fee schedule updates.** When CIPC updates the fee schedule (which happens periodically), the `cipc_fee_schedule` table needs updating. Whether via admin UI or a migration on each fee change is deferred to implementation.
+
+
 
 
 
