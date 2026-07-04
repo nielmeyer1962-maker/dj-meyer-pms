@@ -1797,6 +1797,153 @@ This ticket requires:
 - **Estimated-vs-actual reconciliation** at 202703 time — should the PMS help compute the required top-up amount from the client's draft AFS, or is that purely tax-software territory? Deferred; likely tax-software territory.
 - **Nil-filing consolidation with VAT201 and EMP201.** `SUBMITTED_NIL` is being introduced on `IRP6Status` here. VAT201 and EMP201 have the same conceptual need but currently model it as `SUBMITTED` + R0 `PAID`. Whether to retrofit `SUBMITTED_NIL` onto the shared `ObligationStatus` enum (or introduce a Nil-filing flag) is a future consolidated ticket.
 
+- ## Ticket 5a — SARS Query tracker (manual entry)
+
+**Goal.** Surface every SARS query as a tracked item with a 21-working-day countdown, so the firm catches queries before SARS raises an additional assessment and withdraws money from the client's bank account. Manual entry — Niel sees the SMS on his phone, opens PMS, creates a new `SARSQuery` item. No SMS automation, no eFiling content sync in this ticket — those are deferred to Tickets 5b and 5c respectively.
+
+**Scope discipline.** SARS queries are **event-driven, not date-driven**. The PMS cannot generate them; it can only receive them after the fact. `SARSQuery` is its own model — neither an `ObligationInstance` (no cadence, no period) nor a `Task` (queries have specific structure: a 21-working-day clock, an originating return reference, and a state machine that ends only when SARS closes the matter).
+
+**Divergence from Ticket 3a.** The 3a plan did not anticipate query tracking as an obligation type. This ticket introduces `SARSQuery` as a new concept alongside `ObligationInstance` and `Task`, in the same way Ticket 3g introduced `Task`. No enum values are added; the SARSQuery model is entirely separate.
+
+### Applicability rule
+
+Any client can receive a SARS query at any time. No flag on `Client` required. The `SARSQuery` model is populated by manual entry, not by a generator.
+
+### Operational context (why this ticket matters)
+
+- Firm files ~4,500 statutory returns per year across all obligation types
+- Roughly 10% of filings trigger a SARS query — so ~450 queries per year
+- Query notification arrives as SMS to Niel's phone first, then becomes visible on eFiling
+- Firm has 21 working days to respond
+- If no response: SARS raises an additional assessment, imposing their own number on the client
+- Shortly after: SARS withdraws the money directly from the client's bank account
+- Niel: *"This creates 90% of our stress."*
+
+This ticket is the manual foundation. Ticket 5b introduces SMS automation (SMS gateway → PMS → alert assignee). Ticket 5c introduces eFiling content sync (pull the actual query body from eFiling into the PMS). Splitting the work this way front-loads the value: 5a alone delivers the tracker + countdown + dashboard surfacing — the core stress-relief — without depending on any of the harder integration work.
+
+### Schema sketch
+
+New `SARSQuery` model, new `sars_queries` table:
+
+```
+SARSQuery:
+  id                    int PK
+  client_id             FK clients.id ON DELETE RESTRICT
+  tax_type              Enum SARSQueryTaxType
+                                             -- IT14, IT12, IRP6, VAT201,
+                                             --   EMP201, EMP501, TRUST, OTHER
+  related_obligation_id int | None           -- FK to obligation_instances.id or
+                                             --   it14_instances.id etc.
+                                             -- polymorphic reference; nullable when
+                                             --   query isn't linked to a specific
+                                             --   filed return. See open questions.
+  received_at           DateTime (timezone-aware)
+                                             -- when Niel logged the SMS in the PMS
+  due_date              date                 -- received_at + 21 working days
+                                             --   (excludes weekends and SA public holidays)
+  status                Enum SARSQueryStatus
+                                             -- RECEIVED, RESPONSE_DRAFTING,
+                                             --   RESPONSE_SUBMITTED, CLOSED_RESOLVED
+  subject               str(200)             -- short description
+                                             --   ("Source of funds query", etc.)
+  notes                 Text                 -- working notes, drafts of response
+  is_billable           bool                 -- default True; generic obligation flag
+  assignee_id           FK staff.id ON DELETE SET NULL
+  created_at, updated_at
+```
+
+Composite index `(status, due_date)` for the OVERDUE / due-soon dashboard queries.
+
+**No uniqueness constraint** — multiple queries on the same client and return are legitimate; SARS can re-query.
+
+### Status state machine
+
+```
+RECEIVED → RESPONSE_DRAFTING → RESPONSE_SUBMITTED → CLOSED_RESOLVED
+```
+
+Four states. Reversible per the same service-layer-only philosophy established in Ticket 3g and 4d. Idempotent transitions raise `ValueError`.
+
+**Note on the CLOSED_ADDITIONAL_ASSESSMENT outcome (deliberately excluded).** An earlier draft included a terminal state for "SARS raised an additional assessment despite firm's response." Per Niel: *"Leave this out. This will be avoided long before it happens."* The PMS is being built precisely to prevent that outcome. Including it as a tracked terminal state is admitting defeat. If additional assessment does happen, it becomes a Ticket 6 (SARS Dispute) — a separate concept with its own 30-working-day NOO deadline.
+
+### Due-date rule
+
+`due_date = received_at + 21 working days`, where working days excludes Saturdays, Sundays, and SA public holidays.
+
+Same working-day utility used by Tickets 4a (IT14), 4b (IT12), 4d (IRP6), 4e (EMP201) — shared infrastructure folded into whichever ships first.
+
+**OVERDUE** is derived at read time: `status IN (RECEIVED, RESPONSE_DRAFTING) AND due_date < today_sast()`. This is the critical dashboard surfacing — overdue SARS queries are the stress source. They must be visually prominent, not buried in a general list.
+
+### Dashboard placement
+
+This is the operational core of the ticket. The current `/dashboard` is obligation-focused. SARS queries need **prominent, separate surfacing** — not folded into the obligation list.
+
+Proposed layout for `/dashboard`:
+
+- **Top section titled "SARS Queries — open"**
+  - Open queries sorted by `due_date` ascending (most urgent first)
+  - Overdue queries shown with a red banner and count badge
+  - Each row: client name, tax type, days remaining (or days overdue), assignee, subject, link to detail
+- **Existing obligation table continues below** (unchanged from current design)
+
+Main nav also gets a "SARS Queries" link to a dedicated full-list page with filtering.
+
+### Routes
+
+- `GET /dashboard/sars-queries/` — list all (filterable by status, assignee, client, tax_type)
+- `GET /dashboard/sars-queries/new` — new-query form
+- `POST /dashboard/sars-queries/new` — create
+- `GET /dashboard/sars-queries/<id>` — detail
+- `POST /dashboard/sars-queries/<id>/edit` — update (all fields editable, same model as Task from Ticket 3g)
+- `POST /dashboard/sars-queries/<id>/transition` — status change
+
+### Staff allocation
+
+When a query is created, the assignee defaults to the staff member already allocated to the client (the same staff member who would have filed the underlying return). The firm can reassign as needed. Tsego is not centralised for queries — queries belong to whoever owns the client, same as tax obligations.
+
+### Out of scope (for 5a)
+
+- **SMS automation** — capturing the SARS SMS notification directly into the PMS (Ticket 5b)
+- **eFiling content sync** — pulling the actual query body text from eFiling (Ticket 5c)
+- **Email notifications** to assignee when a new query is created or when one approaches OVERDUE
+- **Bulk operations** (assign-to-staff, mark-multiple-closed)
+- **Reporting / metrics** ("how many queries did we close on time last quarter?")
+- **SARS dispute / NOO tracking** — separate future Ticket 6
+- **Workload visibility / billable-hours reporting** (Ticket 9)
+
+### Schema implications
+
+1. **New table `sars_queries`** per the schema above.
+2. **New enum `SARSQueryStatus`** — `RECEIVED`, `RESPONSE_DRAFTING`, `RESPONSE_SUBMITTED`, `CLOSED_RESOLVED`.
+3. **New enum `SARSQueryTaxType`** — `IT14`, `IT12`, `IRP6`, `VAT201`, `EMP201`, `EMP501`, `TRUST`, `OTHER`.
+4. **No changes to `Client` model.** No new flag required.
+
+### Decisions locked
+
+1. Separate `SARSQuery` model — not an obligation, not a task. Structurally distinct because event-driven with a 21-working-day clock and a state machine that ends only on SARS closure.
+2. 21-working-day deadline calculation using SA public holidays (shared utility with Tickets 4a, 4b, 4d, 4e).
+3. Prominent dashboard surfacing — top section, not buried in the obligation list. Overdue queries visually flagged.
+4. Status flow ends at `CLOSED_RESOLVED`. No `CLOSED_ADDITIONAL_ASSESSMENT` terminal state; that outcome becomes a Ticket 6 SARS Dispute rather than a query closure.
+5. All fields editable on the detail page (subject, tax_type, related_obligation_id, assignee, notes) — same editability model as Task from Ticket 3g. Status changes via transitions only.
+6. Manual entry; no SMS automation, no eFiling integration in this ticket.
+7. Assignee defaults to the client's allocated staff member.
+8. `is_billable` flag on the query follows the generic default `True` established in Ticket 4a.
+9. Ticket 5 is split into 5a (this ticket, manual foundation), 5b (SMS automation, future), 5c (eFiling content sync, future). Splitting front-loads value: 5a alone delivers meaningful stress relief without depending on the harder integration work in 5b/5c.
+
+### Hard dependencies
+
+- **Working-day calculation utility** with SA public holiday awareness — shared with Tickets 4a, 4b, 4d, 4e. Folded into whichever ships first.
+
+### Open questions for implementation time
+
+- **Polymorphic `related_obligation_id`.** A query can be linked to an IT14 (in `it14_instances`), a VAT201 (in `obligation_instances`), an IRP6 (in `irp6_instances`), etc. SQL doesn't natively support polymorphic FKs. Options: (a) generic `(related_table, related_id)` pair with app-layer validation; (b) separate nullable FK columns per obligation type; (c) leave unlinked in 5a and add proper linkage in a future refactor. Deferred to implementation.
+- **`tax_type` enum completeness.** Current list — IT14, IT12, IRP6, VAT201, EMP201, EMP501, TRUST, OTHER — should probably grow when Trust returns (Ticket 4c) and WCA/RMA (Ticket 4h) are drafted. `OTHER` is the escape hatch until then.
+- **NOO / SARS dispute linkage.** When a query fails and an additional assessment happens, the firm lodges a NOO. That NOO becomes a Ticket 6 `SARSDispute` record. Should the `SARSQuery` carry a nullable `escalated_to_dispute_id` FK, or is the linkage the other direction (`SARSDispute` references originating `SARSQuery`)? Decided at Ticket 6 draft time.
+- **21-working-day count from `received_at` vs SARS-side "correspondence issued" date.** The 21-day SARS clock actually starts from the day SARS issued the correspondence, not when Niel logged it in the PMS. If Niel logs an SMS several days late, the PMS deadline would be wrongly generous. Options: (a) add a separate `sars_issued_at` field for the true SARS-side date; (b) accept the small slippage and rely on Niel to log promptly. Deferred.
+
+
+
+
 
 
 
