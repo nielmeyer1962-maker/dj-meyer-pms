@@ -1642,5 +1642,161 @@ This ticket requires:
 - **PAYE registration timing.** When a client newly registers for PAYE mid-year, do we backfill the EMP201 obligations for the months prior to registration, or only generate going forward? Assumption: only going forward. Confirm at implementation time.
 - **Turnover-driven SDL applicability** — SDL is only owed if annual payroll exceeds R500k. Does the PMS need to model this threshold, or is it implicit in the PAYE registration decision? Deferred; likely no PMS modelling needed since payroll software handles the calculation.
 
+- ## Ticket 4d — IRP6 (provisional tax)
+
+**Goal.** Track and surface the three IRP6 submission windows (first provisional, second provisional, voluntary third top-up) that every provisional taxpayer must file each year of assessment, with due dates derived from each client's year-end and the SARS business-day rule.
+
+**Scope discipline.** IRP6 is an obligation type with its own model (`IRP6Instance`), not folded into `ObligationInstance`. Justified by: three windows per (client, YOA) with a discriminator, inter-window calculation dependencies (window 2's payment is a function of window 1's payment), and Nil-filing as routine rather than exceptional. Independent of IT14 / IT12 / Trust returns — those are annual *return* obligations capturing final liability. IRP6 captures the *instalments* leading to that liability. The PMS does not calculate the tax — it tracks the deadline, the submission status, and the payment status. Calculation lives in SARS eFiling and the firm's tax software.
+
+**Divergence from Ticket 3a.** The original 3a plan listed `IRP6` as a future value on the `ObligationType` enum. This ticket deliberately replaces that intent: IRP6 gets its own table and its own status enum. Ratified in Decision 1 below.
+
+### Applicability rule
+
+A client has IRP6 obligations if they are a **provisional taxpayer** — flag `Client.is_provisional_taxpayer: bool` introduced by this ticket.
+
+Defaults per entity type:
+- **Every company and CC** — `True`. All IT14-filing entities must also file IRP6, even a Nil return, without exception.
+- **Trusts** — `True` if the trust derives taxable income. Confirmed per-client at import; firm sets manually thereafter.
+- **Individuals and sole props** — case-by-case. `True` if SARS has registered them as a provisional taxpayer; otherwise `False`. Firm sets per client at import time and manually thereafter.
+
+Clients flagged `is_provisional_taxpayer = False` get no IRP6 obligation instances generated.
+
+The same `is_provisional_taxpayer` flag is reused by Ticket 4b (IT12) to select which of the two IT12 deadlines (`IT12_NONPROVISIONAL` or `IT12_PROVISIONAL`) applies to individual clients. The two workflows sit in different parts of the calendar year, but the underlying factual flag is one.
+
+### Due-date rule
+
+Three submission windows per Year of Assessment. Window numbering uses the YOA code + sequence: `<YOA>01`, `<YOA>02`, `<YOA>03`. Worked example for a 28 February 2027 year-end (YOA 2027):
+
+| Window | Code | Period covered | Due date | Business-day rule |
+|---|---|---|---|---|
+| 1st provisional | `202701` | 1 Mar 2026 – 31 Aug 2026 | Last day of month 6 of YOA (31 Aug 2026) | If weekend or SA public holiday → preceding business day |
+| 2nd provisional | `202702` | 1 Mar 2026 – 28/29 Feb 2027 | Last day of YOA (28/29 Feb 2027) | Same |
+| 3rd top-up | `202703` | Same as 202702 | **7 months after year-end** (30 Sep 2027 for Feb y/e) | Same |
+
+**Note on non-February year-ends:** The formula is parameterised on `client.year_end_month/day`, not hard-coded to February. A June year-end client (YOA 2027 = 1 July 2026 to 30 June 2027) has 202701 due 31 December 2026, 202702 due 30 June 2027, 202703 due 31 January 2028.
+
+**Note on the 3rd top-up (202703):** Voluntary in legal terms — not filing 202703 does not by itself trigger a SARS penalty. But the top-up exists to escape interest under s89quat of the Income Tax Act on underestimated liability. In practice it is *effectively mandatory* whenever the 202702 estimate falls short of actual liability. The PMS surfaces 202703 prominently on the dashboard, not as an optional afterthought.
+
+### Calculation rule (for staff reference, not enforced by PMS)
+
+- **202701 payment** = full-year forecast × 50%. Always 50% of the estimated full-year tax, regardless of actual income earned in the first six months.
+- **202702 payment** = full-year forecast (refined) less amount paid at 202701. If the forecast is unchanged, 202702 pays the other 50%. If the forecast has risen, 202702 pays more.
+- **202703 payment** = top-up to cover underestimation from 202702, based on figures now more reliable because AFS has been drafted.
+
+The PMS records these amounts against each `IRP6Instance` but does not compute them.
+
+### Generator behaviour
+
+The generator emits **three `IRP6Instance` rows per provisional-taxpayer client per YOA**:
+
+```
+IRP6Instance:
+  id                int PK
+  client_id         FK clients.id ON DELETE RESTRICT
+  yoa               int                        -- e.g., 2027
+  window_code       str(2)                     -- one of "01", "02", "03"
+  period_start      date                       -- first day of YOA
+  period_end        date                       -- see per-window rules above
+  due_date          date                       -- per the rule above, business-day adjusted
+  status            IRP6Status                 -- new enum, default PENDING
+  is_billable       bool                       -- default True; generic across obligations
+  estimated_amount  Decimal | None             -- full-year forecast (windows 01 & 02)
+                                               --   or final estimate (window 03)
+  payment_amount    Decimal | None             -- captured when payment cleared
+  notes             Text | None
+  assignee_id       FK staff.id ON DELETE SET NULL
+  created_at, updated_at
+```
+
+- Composite uniqueness on `(client_id, yoa, window_code)`.
+- Composite index on `(status, due_date)` for the dashboard's overdue / due-soon queries.
+- Idempotency: re-running the generator at YOA boundary is safe (rows exist, no-op).
+
+### Required source data
+
+To file an IRP6 the firm needs:
+
+- Client's SARS Income Tax reference number (already in Client model)
+- Client's year-end date (already in Client model as `year_end_month/day`)
+- Estimated taxable income for the YOA — calculated in the firm's tax software, not in the PMS
+- Prior-year IRP6 history for "basic amount" fallback — SARS-side, not PMS data
+
+PMS holds no calculation inputs. PMS holds the deadline, the estimated amount, and the payment status.
+
+### Status state machine
+
+The existing generic `ObligationStatus` is insufficient. IRP6 needs explicit handling for Nil filings, which are *routine* for IT14-filing entities. A new `IRP6Status` enum on the new `IRP6Instance` model:
+
+- `PENDING` — generated, not yet submitted
+- `SUBMITTED_NIL` — filed with zero estimate (routine for dormant or loss-making entities)
+- `SUBMITTED_PAID` — filed with a payable amount and payment cleared
+- `SUBMITTED_UNPAID` — filed with a payable amount but payment outstanding (overdue if past `due_date`)
+- `EXEMPT` — SARS-granted exemption (rare)
+
+Reversible per the service-layer-only philosophy established in Tickets 3g and 4a. Idempotent transitions raise `ValueError`.
+
+**Note on `202703` handling:** Its `PENDING` status is treated as *demanding attention* in the UI when 202702 was estimated below expected actual liability. The PMS dashboard should surface 202703-`PENDING` prominently for any client where the AFS-based full-year liability exceeds what was paid through 202702.
+
+### Business-day rule with SA public holidays
+
+When a calculated `due_date` (period_end, or period_end + 7 months for 202703) falls on a weekend or SA public holiday, roll back to the preceding business day. SA public holidays are fixed by the Public Holidays Act and proclaimed annually.
+
+Two implementation options for the holiday source, decided at implementation time:
+
+- **`holidays` Python package** with `country="ZA"` — well-maintained, adds a dependency
+- **Project-local `sa_public_holidays` table** — one-time data entry per year, no external dependency
+
+Either works. Choice deferred to implementation.
+
+This working-day utility is shared with Tickets 4a (IT14), 4b (IT12), 4e (EMP201), and 5a (SARS Query). Folded into whichever ticket ships first.
+
+### Staff allocation
+
+Per-client allocation. The accounting staff member assigned to the client files that client's IRP6 obligations. Same allocation model as VAT201, IT14, IT12, EMP201 — **not** centralised to Tsego.
+
+### Out of scope
+
+- Tax calculation (lives in the firm's tax software, not the PMS)
+- "Basic amount" fallback lookup from SARS (eFiling handles it)
+- IRP6 submission via the SARS eFiling API (manual filing on eFiling, PMS just tracks)
+- Penalty / interest calculation (s89quat is out of scope; PMS tracks status only)
+- 202703 underestimation-interest forecasting
+- Bulk-rollover of provisional-taxpayer flags at YOA boundary
+- Automation to detect from AFS whether a 202703 top-up is likely needed
+
+### Schema implications
+
+This ticket requires:
+
+1. **New table `irp6_instances`** per the schema above.
+2. **New enum `IRP6Status`** — `PENDING`, `SUBMITTED_NIL`, `SUBMITTED_PAID`, `SUBMITTED_UNPAID`, `EXEMPT`.
+3. **Add `is_provisional_taxpayer: bool` (NOT NULL, default per-entity-type) to `Client` model.** Shared with Ticket 4b for IT12 deadline selection.
+
+### Decisions locked
+
+1. Separate `IRP6Instance` model — not folded into `ObligationInstance`. Ratifies divergence from 3a plan's IRP6-as-enum-value approach.
+2. Three windows per (client, YOA): codes `01`, `02`, `03`. Voluntary `03` is still tracked and surfaced on the dashboard.
+3. Window cadence parameterised on client's `year_end_month/day`; not hard-coded to February.
+4. Business-day-roll-back rule: weekend or SA public holiday → preceding business day.
+5. Per-client staff allocation (not centralised to Tsego).
+6. Calculation is out of scope; PMS tracks deadlines, estimated amounts, and payment status only.
+7. `IRP6Status` includes explicit `SUBMITTED_NIL` — Nil returns are routine, not exceptional, and deserve their own status.
+8. `is_provisional_taxpayer` flag is shared with Ticket 4b (IT12 deadline selection) — one factual flag, two operational workflows.
+9. Companies and CCs default to `is_provisional_taxpayer = True` at import.
+10. `is_billable` flag on the obligation instance follows the generic default `True` established in Ticket 4a.
+11. Working-day calculation utility (with SA public holidays) is shared infrastructure with Tickets 4a, 4b, 4e, 5a.
+
+### Hard dependencies
+
+- **Working-day calculation utility** with SA public holiday awareness — shared with Tickets 4a, 4b, 4e, 5a. Folded into whichever ships first.
+
+### Open questions for implementation time
+
+- **Trust default for `is_provisional_taxpayer`.** Firm classifies most trusts as provisional taxpayers by default, but individual trust circumstances vary. Import-time policy: default `True` for trusts, allow per-trust override? Or default `False` and set explicitly? Deferred.
+- **Holiday source** — `holidays` Python package vs project-local `sa_public_holidays` table. Both work; pick at implementation based on dependency preferences.
+- **Estimated-vs-actual reconciliation** at 202703 time — should the PMS help compute the required top-up amount from the client's draft AFS, or is that purely tax-software territory? Deferred; likely tax-software territory.
+- **Nil-filing consolidation with VAT201 and EMP201.** `SUBMITTED_NIL` is being introduced on `IRP6Status` here. VAT201 and EMP201 have the same conceptual need but currently model it as `SUBMITTED` + R0 `PAID`. Whether to retrofit `SUBMITTED_NIL` onto the shared `ObligationStatus` enum (or introduce a Nil-filing flag) is a future consolidated ticket.
+
+
 
 
