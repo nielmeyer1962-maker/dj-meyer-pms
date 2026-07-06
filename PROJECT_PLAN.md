@@ -2357,6 +2357,181 @@ Per-client allocation. The accounting staff member assigned to the trust files t
 - **IT3(t) `CLOSED` semantics.** `CLOSED` requires the firm to confirm downstream beneficiary IT12s consumed the certificate. Whether this happens automatically (when linked beneficiary IT12 moves to `SUBMITTED`) or manually (staff ticks a box) is an implementation-time UX call. Manual is fine at 8 trusts.
 - **Trust-fund IRP6 windows.** Trusts that are provisional taxpayers already get IRP6 obligations via Ticket 4d. The `year_end_month/day` on a trust `Client` should be set to Feb 28/29 at import. Import-time policy detail.
 
+- ## Ticket 4f — EMP501 (employer reconciliation) and IRP5 issuance
+
+**Goal.** Track and surface the twice-yearly EMP501 employer reconciliation deadlines (interim and final) for every PAYE-registered client, plus the annual IRP5 certificate issuance that flows from the final reconciliation, so neither the reconciliations nor the employee certificates slip past deadline.
+
+**Scope discipline.** Two related but distinct obligations, mirroring the paired-model pattern established in Ticket 4c (trust return + IT3(t) issuance):
+
+1. **EMP501 reconciliation** — twice yearly. The interim recon covers the first six months of the tax year (1 March – 31 August); the final recon covers the full tax year (1 March – 28/29 February). Each reconciles the period's EMP201 monthly declarations against actual payroll.
+2. **IRP5 issuance** — annual, flowing from the final reconciliation only. IRP5 certificates show each employee their earnings and employees' tax paid, and become the basis for the employees' own IT12 returns.
+
+The PMS tracks deadlines and lifecycle status for both. It does not compute the reconciliation, does not generate the IRP5 certificates (e@syFile / payroll software does), and does not distribute certificates to employees.
+
+**Divergence from Ticket 3a — and resolution of 4e's provisional note.** The 3a plan listed `EMP501` as a future value on the `ObligationType` enum, and Ticket 4e provisionally noted that EMP501 "could reuse ObligationInstance". This ticket resolves that question in favour of a **separate model**: the interim/final discriminator, the paired IRP5 issuance obligation, and the recon-vs-declaration semantics justify the same treatment as IT14/IT12/IRP6/Trust rather than the shared table. Ratified in Decision 1 below.
+
+### Applicability rule
+
+Both obligations apply to every client flagged `is_paye_registered = True` (flag introduced in Ticket 4e). If a client files monthly EMP201s, they file EMP501 reconciliations. No new applicability flag needed.
+
+Clients flagged `is_paye_registered = False` get no EMP501 or IRP5 obligation instances generated.
+
+**Edge case:** a client who deregisters for PAYE mid-year still owes a final reconciliation for the part-year. Firm handles by leaving the already-generated instances in place and marking any not-applicable instance `EXEMPT` per-instance.
+
+### Due-date rule — EMP501 reconciliations
+
+Two reconciliation windows per tax year. Deadlines are SARS-published annually and captured in the `sars_filing_deadlines` table introduced by Ticket 4a, using the two return types already present in the `SARSReturnType` enum:
+
+| Recon | Period covered | Return type | Typical deadline | Fallback if not entered |
+|---|---|---|---|---|
+| Interim | 1 Mar – 31 Aug of the tax year | `EMP501_INTERIM` | ~31 October same calendar year | 31 October |
+| Final | 1 Mar – 28/29 Feb (full tax year) | `EMP501_FINAL` | ~31 May following year-end | 31 May of (YOA + 1) |
+
+Business-day-roll-back for weekends and SA public holidays applies (shared utility with Tickets 4a, 4b, 4c, 4d, 4e, 5a).
+
+If no `sars_filing_deadlines` row exists for the (YOA, return_type) tuple, the generator uses the fallback and flags it visually on the dashboard so the firm knows the SARS notice hasn't been entered yet — same pattern as 4a/4b/4c.
+
+### Due-date rule — IRP5 issuance
+
+IRP5 certificates must reach employees in time for their IT12 filing season. Deadline is a **fixed calendar date captured in `sars_filing_deadlines`** under a new `SARSReturnType` value `IRP5` (added by this ticket). Fallback default: 31 May of (YOA + 1) — the same date as the final reconciliation deadline, since e@syFile generates the certificates as part of the final recon submission.
+
+### Generator behaviour
+
+Three rows generated per PAYE-registered client per tax year — two reconciliations plus one issuance:
+
+**`EMP501Instance` (two rows per year — interim and final):**
+
+```
+EMP501Instance:
+  id                int PK
+  client_id         FK clients.id ON DELETE RESTRICT
+  yoa               int                     -- e.g., 2026 for tax year ending 28 Feb 2026
+  recon_type        EMP501ReconType         -- INTERIM or FINAL
+  period_start      date                    -- always 1 March of (YOA - 1)
+  period_end        date                    -- 31 Aug of (YOA - 1) for INTERIM;
+                                            --   28/29 Feb of YOA for FINAL
+  due_date          date                    -- per sars_filing_deadlines lookup,
+                                            --   business-day adjusted
+  status            EMP501Status            -- new enum, default PENDING
+  is_billable       bool                    -- default True; generic obligation flag
+  notes             Text | None
+  assignee_id       FK staff.id ON DELETE SET NULL
+  created_at, updated_at
+```
+
+**`IRP5Issuance` (one row per year, paired with the FINAL recon):**
+
+```
+IRP5Issuance:
+  id                int PK
+  client_id         FK clients.id ON DELETE RESTRICT
+  yoa               int                     -- same YOA as the paired FINAL EMP501Instance
+  due_date          date                    -- per sars_filing_deadlines (IRP5),
+                                            --   business-day adjusted;
+                                            --   fallback 31 May of (YOA + 1)
+  status            IRP5IssuanceStatus      -- new enum, default PENDING
+  is_billable       bool                    -- default True
+  notes             Text | None             -- e.g., employee count, delivery method
+  assignee_id       FK staff.id ON DELETE SET NULL
+  created_at, updated_at
+```
+
+- Composite uniqueness on `(client_id, yoa, recon_type)` for `EMP501Instance`; on `(client_id, yoa)` for `IRP5Issuance`.
+- Composite index on `(status, due_date)` on each table for the dashboard's overdue / due-soon queries.
+- Idempotency: re-running the generator at YOA boundary is safe.
+
+### Status state machines
+
+**`EMP501Status`** — deliberately simple (per elicitation):
+
+```
+PENDING → SUBMITTED → CLOSED
+```
+
+Three states. Reversible per the service-layer-only philosophy established in Tickets 3g and 4a. Idempotent transitions raise `ValueError`.
+
+**No SARS-assessment lifecycle.** A reconciliation is not assessed the way an IT14 is. SARS-side validation issues (Employment Tax Validation mismatches, recon rejections, requests for payroll detail) arrive through the same notification channel as all other SARS correspondence and are tracked as **SARS Queries via Ticket 5a** — not as states on the EMP501 itself. `SUBMITTED → CLOSED` happens when the firm confirms SARS has accepted the recon without outstanding issues.
+
+**`IRP5IssuanceStatus`** — same simple shape as IT3(t) issuance from Ticket 4c:
+
+```
+PENDING → ISSUED → CLOSED
+```
+
+Three states. `ISSUED` means certificates have been generated (via e@syFile as part of the final recon) and delivered to the client / employees; `CLOSED` means the firm has confirmed no re-issues or corrections are outstanding.
+
+### Coupling between the FINAL recon and IRP5 issuance
+
+Operationally, IRP5 certificates are generated by e@syFile **as part of submitting the final reconciliation** — the two happen together in practice. The PMS models them as separate instances (per the 4c pattern) because they have separate completion semantics: a final recon can be `SUBMITTED` while certificate delivery to employees is still in progress, and IRP5 corrections/re-issues can continue after the recon is accepted.
+
+No hard transition-layer gate is enforced between them in this ticket (unlike CIPC's BO-precedes-AR rule in 4g) — at the firm's operational scale, staff know the sequence. Revisit if mis-sequencing ever actually happens.
+
+### Required source data
+
+To file an EMP501 the firm needs:
+- Client's SARS PAYE reference number (already on `Client`)
+- The period's EMP201 declarations (tracked in the PMS via Ticket 4e)
+- Payroll records for the period (payroll software: SimplePay, Sage, Pastel)
+- e@syFile Employer software for submission
+
+To issue IRP5s the firm needs:
+- The completed final reconciliation (e@syFile generates certificates from it)
+- Employee details (payroll software)
+
+PMS holds the deadlines and lifecycle statuses. Reconciliation computation and certificate generation live in payroll software and e@syFile.
+
+### Staff allocation
+
+Per-client allocation. The accounting staff member assigned to the client files that client's EMP501s and handles IRP5 issuance. Same allocation model as VAT201, IT14, IT12, IRP6, EMP201 — **not** centralised to Tsego.
+
+### Out of scope
+
+- Reconciliation computation (payroll software + e@syFile)
+- IRP5 certificate generation and delivery mechanics (e@syFile)
+- Direct e@syFile or SARS eFiling integration
+- ETV validation-issue tracking as EMP501 states (handled as SARS Queries via Ticket 5a)
+- EMP201 re-submission workflow when the recon surfaces mismatches (see open questions)
+- Employee-level IRP5 tracking (one certificate per employee) — the PMS tracks the issuance obligation per client, not per employee
+- IT12 pre-population from IRP5 data (SARS does this on eFiling; also Ticket 8c territory)
+- Workload visibility / billable-hours reporting (Ticket 9)
+
+### Schema implications
+
+1. **New table `emp501_instances`** per the `EMP501Instance` schema above.
+2. **New table `irp5_issuances`** per the `IRP5Issuance` schema above.
+3. **New enum `EMP501ReconType`** — `INTERIM`, `FINAL`.
+4. **New enum `EMP501Status`** — `PENDING`, `SUBMITTED`, `CLOSED`.
+5. **New enum `IRP5IssuanceStatus`** — `PENDING`, `ISSUED`, `CLOSED`.
+6. **Add `IRP5` to the `SARSReturnType` enum** in `sars_filing_deadlines` (table introduced by Ticket 4a; `EMP501_INTERIM` and `EMP501_FINAL` are already present in the enum from 4a's definition).
+7. **No new columns on `Client`.** Reuses `is_paye_registered` from Ticket 4e.
+
+### Decisions locked
+
+1. Separate `EMP501Instance` and `IRP5Issuance` models — not folded into `ObligationInstance`. Resolves 4e's provisional "could reuse ObligationInstance" note in favour of the paired-model pattern from Ticket 4c. Ratifies divergence from 3a plan's EMP501-as-enum-value approach.
+2. Two reconciliation instances per (client, YOA) — `INTERIM` and `FINAL` — discriminated by `recon_type`.
+3. One IRP5 issuance instance per (client, YOA), paired with the FINAL recon. IRP5s flow only from the final reconciliation; the interim is submission-only.
+4. Deadlines captured in the shared `sars_filing_deadlines` table (`EMP501_INTERIM`, `EMP501_FINAL` already in the enum; `IRP5` added by this ticket). Fallbacks: 31 October (interim), 31 May of YOA+1 (final and IRP5).
+5. `EMP501Status` is deliberately simple — `PENDING → SUBMITTED → CLOSED`. SARS validation issues are tracked as SARS Queries (Ticket 5a), not as EMP501 states.
+6. `IRP5IssuanceStatus` mirrors IT3(t) issuance from 4c — `PENDING → ISSUED → CLOSED`.
+7. No hard transition-layer gate between FINAL recon and IRP5 issuance — operational sequence is known to staff; revisit only if mis-sequencing occurs.
+8. Applicability reuses `Client.is_paye_registered` from Ticket 4e — no new flag.
+9. Per-client staff allocation (not centralised).
+10. `is_billable` flag on both models follows the generic default `True` established in Ticket 4a.
+
+### Hard dependencies
+
+- **Ticket 4a (IT14)** — introduces the `sars_filing_deadlines` table and its admin UI. 4f adds one new `SARSReturnType` enum value (`IRP5`).
+- **Ticket 4e (EMP201)** — introduces `Client.is_paye_registered`, which drives 4f's applicability. Conceptually also the source of the EMP201 instances the recon reconciles.
+- **Working-day calculation utility** — shared with Tickets 4a, 4b, 4c, 4d, 4e, 5a. Folded into whichever ships first.
+
+### Open questions for implementation time
+
+- **EMP201 re-submission coupling.** When a reconciliation surfaces a mismatch, the fix is often a corrected EMP201 for one or more months. Does the PMS need a formal link between the EMP501 instance and the underlying EMP201 `ObligationInstance` rows for the period, or is the connection informal (staff know the months)? At current scale informal is fine; revisit if recon-driven corrections become frequent.
+- **IRP5 re-issue handling.** When a certificate is corrected and re-issued after `CLOSED`, does the firm reopen the `IRP5Issuance` (reversible transition back to `ISSUED`) or track the correction in `notes`? Reversible transitions are already supported; the operational convention is an implementation-time call.
+- **Employee-count metadata.** Would capturing the number of employees per IRP5 issuance (in a structured field rather than `notes`) be useful for Ticket 9 (workload visibility)? Deferred until Ticket 9 is drafted.
+- **Shared status enums.** `EMP501Status` and `IT3TIssuanceStatus`/`IRP5IssuanceStatus` pairs are near-identical shapes. Same consolidation question as the `AnnualReturnStatus` note in Tickets 4b and 4c. Implementation-time call.
+
+
 
 
 
