@@ -2175,6 +2175,189 @@ For ad-hoc BO updates:
 - **New CIPC registrations.** Same treatment — handled as `Task` records for now. Future ticket if volume/complexity justifies.
 - **Fee schedule updates.** When CIPC updates the fee schedule (which happens periodically), the `cipc_fee_schedule` table needs updating. Whether via admin UI or a migration on each fee change is deferred to implementation.
 
+- ## Ticket 4c — Trust return (ITR12T) and IT3(t) issuance
+
+**Goal.** Track and surface the annual trust return (ITR12T) deadline plus the IT3(t) beneficiary-certificate issuance obligation, for the firm's small population of active trusts, so no filing or certificate issuance slips past deadline.
+
+**Scope discipline.** Two related but distinct obligations per (trust, year of assessment):
+
+1. **Trust return (ITR12T)** — annual return the trust itself files to SARS, following the same lifecycle pattern as IT14 and IT12 (six-state machine including SARS assessment)
+2. **IT3(t) issuance** — certificates the trust issues to each beneficiary showing amounts distributed, feeding the beneficiaries' individual IT12 filings
+
+The PMS tracks the deadlines and lifecycle status for both. It does not compute tax, does not prepare the certificates, does not distribute IT3(t) copies to beneficiaries. Form-preparation work is Ticket 8d (future, analogous to 8a for IT14 and 8c for IT12).
+
+**Right-sized for scale.** The firm has fewer than 8 active trusts. That population size sets the design ambition. Complexity that would be justified for hundreds of clients (structured beneficiary linkage, distribution-rule modelling, discretionary vs vested logic) is deliberately deferred — the firm holds this context in its head at this scale, and the PMS's job is simply to make sure the deadlines don't slip.
+
+**Divergence from Ticket 3a.** The 3a plan listed `TRUST` as a future value on the `ObligationType` enum. This ticket deliberately replaces that intent: trust returns get their own tables and their own status enums, following the same pattern as IT14 (4a), IT12 (4b), IRP6 (4d), and CIPC (4g). Ratified in Decision 1 below.
+
+### Applicability rule
+
+Both obligations apply to entity type `TRUST` where the firm has decided the trust is an active filer for the year. Per Q3 during elicitation: the firm decides case-by-case whether a trust files, driven by a new flag `Client.files_itr12t: bool` (NOT NULL, default `True`). Trusts flagged `False` (dormant, deregistering, non-income-generating conduits) get no obligation instances generated.
+
+**Edge case:** trusts moving to deregistration mid-year — firm marks individual obligation instances `EXEMPT` on a per-instance basis, no change to the applicability flag until the deregistration completes.
+
+### Due-date rule — ITR12T
+
+Trust year-of-assessment is calendar-aligned: 1 March to 28/29 February. Same shape as individuals (per Q2 during elicitation) — no per-trust year-end variation.
+
+The deadline follows SARS's annual filing-season notice, captured in the `sars_filing_deadlines` table introduced by Ticket 4a. This ticket adds a new `SARSReturnType` enum value: `ITR12T`.
+
+If no row exists for the (YOA, ITR12T) tuple, the generator uses a sensible default (`year_end + 8 months` — matching the non-provisional IT12 fallback) and flags this visually on the dashboard so the firm knows the SARS notice hasn't been entered yet.
+
+Business-day-roll-back for weekends and SA public holidays applies (shared utility with Tickets 4a, 4b, 4d, 4e, 5a).
+
+### Due-date rule — IT3(t)
+
+IT3(t) certificates must be issued to beneficiaries before the firm can meaningfully prepare the beneficiaries' IT12s. Operationally: the IT3(t) issuance deadline is **31 May of the year following the trust's YOA** (the date beneficiaries need certificates by so their IT12s can be prepared on time).
+
+If SARS publishes a different or updated date, capture it in `sars_filing_deadlines` as a new `SARSReturnType` value `IT3T` (this ticket adds it). Fallback default: 31 May of `(YOA + 1)`.
+
+### Generator behaviour
+
+Two rows generated per active trust per YOA:
+
+**`TrustReturnInstance` (ITR12T tracking):**
+
+```
+TrustReturnInstance:
+  id                int PK
+  client_id         FK clients.id ON DELETE RESTRICT
+  yoa               int                     -- e.g., 2026 for YOA ending 28 Feb 2026
+  period_start      date                    -- always 1 March of (YOA - 1)
+  period_end        date                    -- always 28/29 Feb of YOA
+  due_date          date                    -- per the ITR12T rule above,
+                                            --   business-day adjusted
+  status            TrustReturnStatus       -- new enum, default PENDING
+  is_billable       bool                    -- default True; generic obligation flag
+  assessed_amount   Decimal | None          -- captured at ASSESSED state
+  paid_amount       Decimal | None          -- captured at PAID state
+  notes             Text | None
+  assignee_id       FK staff.id ON DELETE SET NULL
+  created_at, updated_at
+```
+
+**`TrustIT3TIssuance` (IT3(t) issuance tracking):**
+
+```
+TrustIT3TIssuance:
+  id                int PK
+  client_id         FK clients.id ON DELETE RESTRICT
+  yoa               int                     -- same YOA as the paired TrustReturnInstance
+  due_date          date                    -- typically 31 May of (YOA + 1),
+                                            --   business-day adjusted
+  status            IT3TIssuanceStatus      -- new enum, default PENDING
+  is_billable       bool                    -- default True
+  notes             Text | None             -- e.g., which beneficiaries received certificates
+  assignee_id       FK staff.id ON DELETE SET NULL
+  created_at, updated_at
+```
+
+- Composite uniqueness on `(client_id, yoa)` for each table.
+- Composite index on `(status, due_date)` for the dashboard's overdue / due-soon queries on each.
+- Idempotency: re-running the generator at YOA boundary is safe.
+
+### Status state machines
+
+**`TrustReturnStatus`** — identical to `IT14Status` and `IT12Status`:
+
+```
+PENDING → SUBMITTED → ASSESSED → PAID
+                          ↘
+                        OBJECTED → (Ticket 6 SARSDispute takes over)
+
+PENDING / SUBMITTED → EXEMPT  (SARS-confirmed dormancy or deregistration)
+```
+
+Six states. Reversible per the service-layer-only philosophy established in Ticket 3g and 4a. Idempotent transitions raise `ValueError`.
+
+`OBJECTED` is a parking state — workflow migrates to `SARSDispute` model (future Ticket 6). Refunds terminate at `PAID`.
+
+**`IT3TIssuanceStatus`** — deliberately simple, since IT3(t) doesn't have a SARS assessment lifecycle:
+
+```
+PENDING → ISSUED → CLOSED
+```
+
+Three states. Reversible. Idempotent transitions raise `ValueError`. `ISSUED` means certificates have been prepared and delivered to beneficiaries; `CLOSED` means the firm has confirmed all downstream IT12s consuming the IT3(t) are also filed. `CLOSED` is separate from `ISSUED` because at 8 trusts the firm may care about confirming beneficiary IT12 flow-through actually happened.
+
+### Provisional taxpayer status for trusts
+
+Per Q4 during elicitation: all trusts default to being provisional taxpayers (they generate IRP6 obligations via Ticket 4d), edge cases handled manually.
+
+**Deliberately not adding a trust-specific flag at this ticket.** With fewer than 8 active trusts the firm can manually toggle `Client.is_provisional_taxpayer` (introduced in Ticket 4d) on the rare non-provisional trust. Adding an `is_trust_provisional` field would be over-engineering for the scale. Revisit if the trust population grows meaningfully.
+
+### Beneficiary linkage
+
+**Deliberately deferred.** Per Q5-clarification during elicitation: with fewer than 8 active trusts, the firm holds beneficiary-to-trust relationships in its head, not in a structured PMS table. If Ticket 8d (form preparation for IT12 with pre-population from IT3(t)) needs structured linkage later, add it then. For now, `TrustIT3TIssuance.notes` is where the firm records which beneficiaries received certificates.
+
+### Required source data
+
+To file an ITR12T the firm needs:
+- Trust's SARS Income Tax reference number (held on `Client`)
+- Trust's income and expense statement for the YOA
+- Distribution schedule showing amounts allocated to each beneficiary
+- Tax certificates for the trust's own investment income (IT3(b)/(c))
+
+To issue IT3(t) certificates the firm needs:
+- Distribution schedule (same as above)
+- Beneficiary details (ID number, tax reference, physical address) — held informally on `Client` or in Y drive files at current scale
+
+PMS holds the reference numbers, the deadlines, and the lifecycle statuses. Form preparation work is Ticket 8d.
+
+### Staff allocation
+
+Per-client allocation. The accounting staff member assigned to the trust files that trust's ITR12T and issues its IT3(t) certificates. **Not** centralised — trusts follow the same per-client allocation model as IT14, IT12, IRP6, EMP201.
+
+### Out of scope
+
+- ITR12T tax calculation (lives in tax software)
+- IT3(t) certificate preparation and delivery (firm's tax software / manual process)
+- Direct SARS eFiling integration
+- Beneficiary linkage as structured data (deferred; revisit if trust population grows)
+- Trust-specific provisional-taxpayer flag (deferred; reuse the general `Client.is_provisional_taxpayer` from 4d)
+- Distribution rule modelling (discretionary vs vested, foreign trust rules)
+- Trust termination workflow (rare at current scale)
+- SARS dispute / NOO tracking (Ticket 6)
+- IT3(t) pre-population into beneficiary IT12s (Ticket 8d, form work)
+- Workload visibility / billable-hours reporting (Ticket 9)
+
+### Schema implications
+
+1. **New table `trust_returns`** per the `TrustReturnInstance` schema above.
+2. **New table `trust_it3t_issuances`** per the `TrustIT3TIssuance` schema above.
+3. **New enum `TrustReturnStatus`** — `PENDING`, `SUBMITTED`, `ASSESSED`, `PAID`, `OBJECTED`, `EXEMPT`. Consolidation into a shared `AnnualReturnStatus` with `IT14Status` and `IT12Status` deferred to implementation.
+4. **New enum `IT3TIssuanceStatus`** — `PENDING`, `ISSUED`, `CLOSED`.
+5. **Add `ITR12T` and `IT3T` to the `SARSReturnType` enum** in `sars_filing_deadlines` (table introduced by Ticket 4a). Extends the shared reference table without new columns.
+6. **Add `files_itr12t: bool` (NOT NULL, default `True`) to `Client` model.** Applies to `TRUST` entity type; ignored for other entity types. Same shape as the `is_paye_registered` flag from Ticket 4e.
+
+### Decisions locked
+
+1. Separate `TrustReturnInstance` and `TrustIT3TIssuance` models — not folded into `ObligationInstance`. Ratifies divergence from 3a plan's TRUST-as-enum-value approach.
+2. Two obligation instances per active trust per YOA — one for ITR12T tracking, one for IT3(t) issuance. Both surface on the assigned staff member's dashboard.
+3. Trust YOA is calendar-aligned (1 March to 28/29 February) — no per-trust year-end variation.
+4. Applicability driven by new `Client.files_itr12t: bool` — firm decides case-by-case, defaults to `True`.
+5. ITR12T deadline captured in shared `sars_filing_deadlines` table from Ticket 4a (new `ITR12T` return type). Fallback to `year_end + 8 months` if not entered.
+6. IT3(t) deadline captured similarly (new `IT3T` return type). Fallback to 31 May of `(YOA + 1)`.
+7. `TrustReturnStatus` reuses the IT14/IT12 6-state pattern (`PENDING` through `PAID`, plus `OBJECTED` and `EXEMPT`). Consistency across annual returns.
+8. `IT3TIssuanceStatus` is deliberately simpler — 3 states (`PENDING`, `ISSUED`, `CLOSED`) since IT3(t) has no SARS assessment lifecycle.
+9. Per-client staff allocation (not centralised).
+10. Trust provisional-taxpayer flag reuses `Client.is_provisional_taxpayer` from Ticket 4d — no trust-specific field. Justified by scale (fewer than 8 active trusts).
+11. Beneficiary linkage deferred — no structured `trust_beneficiaries` table at this ticket. Firm holds relationships informally at current scale.
+12. `is_billable` flag on both models follows the generic default `True` established in Ticket 4a.
+
+### Hard dependencies
+
+- **Ticket 4a (IT14)** — introduces the `sars_filing_deadlines` table and its admin UI. 4c extends the table with two new `SARSReturnType` enum values.
+- **Working-day calculation utility** — shared with Tickets 4a, 4b, 4d, 4e, 5a. Folded into whichever ships first.
+
+### Open questions for implementation time
+
+- **Shared vs separate `AnnualReturnStatus` enum** across IT14, IT12, and trust returns. All three have identical members and identical transitions. Consolidating avoids duplication; keeping separate avoids coupling. Same question as raised in Ticket 4b.
+- **When trust population grows.** If the firm's trust practice grows beyond ~20 active trusts, revisit the deferred design decisions (structured beneficiary linkage, trust-specific provisional flag, distribution-rule modelling). At current scale these are correctly out of scope.
+- **IT3(t) `CLOSED` semantics.** `CLOSED` requires the firm to confirm downstream beneficiary IT12s consumed the certificate. Whether this happens automatically (when linked beneficiary IT12 moves to `SUBMITTED`) or manually (staff ticks a box) is an implementation-time UX call. Manual is fine at 8 trusts.
+- **Trust-fund IRP6 windows.** Trusts that are provisional taxpayers already get IRP6 obligations via Ticket 4d. The `year_end_month/day` on a trust `Client` should be set to Feb 28/29 at import. Import-time policy detail.
+
+
 
 
 
