@@ -2531,6 +2531,195 @@ Per-client allocation. The accounting staff member assigned to the client files 
 - **Employee-count metadata.** Would capturing the number of employees per IRP5 issuance (in a structured field rather than `notes`) be useful for Ticket 9 (workload visibility)? Deferred until Ticket 9 is drafted.
 - **Shared status enums.** `EMP501Status` and `IT3TIssuanceStatus`/`IRP5IssuanceStatus` pairs are near-identical shapes. Same consolidation question as the `AnnualReturnStatus` note in Tickets 4b and 4c. Implementation-time call.
 
+- ## Ticket 4h — Workmen's Compensation Return of Earnings (WCA / RMA)
+
+**Goal.** Track and surface the annual Return of Earnings (ROE) filing for every client registered for workmen's compensation cover, across both schemes the firm services — the Compensation Fund (WCA / COIDA, filed via CompEasy) and Rand Mutual Assurance (RMA) — so no filing slips past the hard 30 June deadline.
+
+**Scope discipline.** One obligation type, one model (`ROEFilingInstance`), calendar-year period, centralised to Tsego. The PMS tracks the deadline, the filing status, and the two data inputs Tsego needs (annual turnover and number of workers); it does not file to CompEasy or the RMA portal, and does not compute assessments. Per Tsego (elicitation, 7 July 2026): the ROE is filled in online; the two figures that must be in hand are **annual turnover and number of workers** — everything else is completed on the portal.
+
+**Domain facts locked with Tsego:**
+- The firm files ROE for **94 clients: 15 RMA + 79 WCA** (per Tsego's Return of Earnings list, imported at client-load time).
+- Scheme membership (WCA vs RMA) is a **per-client attribute** recorded on Tsego's list — not derived by rule in the PMS. Imported as a `Client` field.
+- **No nil situations** — every registered client files with actual figures. No `SUBMITTED_NIL` status needed (unlike IRP6).
+- **Hard deadline: 30 June**, penalties after. The filing window opens **1 April** (per the RMA list header "1 April – 30 June"; CompEasy season similarly opens ~1 April).
+- **Assessment period is 1 March to 28/29 February** (the Gazette's defined "year of assessment"; the ROE due 30 June 2026 covers 1 March 2025 – 28 February 2026, per GG 44409 and the 2025/26 tariff notice). This supersedes the earlier calendar-year understanding; confirmed against source documents and verified by Tsego (7 July 2026) against this season's actual submission. The ROE also declares *provisional* payroll for the year ahead, which the Fund uses for the provisional assessment.
+- The 2026 filing (calendar year 2025) is already submitted — the first PMS-tracked cycle is **30 June 2027 for calendar year 2026**. No implementation urgency.
+
+**Divergence from Ticket 3a.** The 3a plan did not enumerate WCA/RMA. This ticket introduces `ROEFilingInstance` as its own model, consistent with the per-obligation-type architecture ratified across Tickets 4a–4g. Ratified in Decision 1 below.
+
+### Applicability rule
+
+A client has an ROE obligation if registered with either scheme. New field on `Client`:
+
+```
+Client.roe_scheme: Enum ROEScheme  -- NONE (default), WCA, RMA
+```
+
+Populated at import from Tsego's Return of Earnings list (94 clients). Clients at `NONE` get no ROE instances generated. When Tsego completes a new workmen's-compensation registration (a `Task` under Ticket 3g), she flips the client's `roe_scheme` manually.
+
+Optional supporting field, populated over time: `Client.roe_registration_number: str | None` (the scheme registration number, e.g. the 99xxxxxxxxx CompEasy numbers already appearing on Tsego's list for some clients).
+
+### Due-date rule
+
+Calendar-year locked — identical for every client regardless of financial year-end:
+
+```
+period_start  = 1 March of (filing_year - 1)
+period_end    = 28/29 February of filing_year
+surface_date  = 1 April of filing_year        -- window opens; appears on Tsego's dashboard
+due_date      = 30 June of filing_year        -- hard deadline, penalties after
+```
+
+No `sars_filing_deadlines` lookup — this is not a SARS obligation and the dates are statutory and stable. Whether the deadline rolls when 30 June falls on a weekend is an open question (below); default behaviour is to treat 30 June as immovable and simply surface early.
+
+### Generator behaviour
+
+One `ROEFilingInstance` per ROE-registered client per filing year:
+
+```
+ROEFilingInstance:
+  id                  int PK
+  client_id           FK clients.id ON DELETE RESTRICT
+  filing_year         int                      -- e.g., 2027 (covering calendar 2026)
+  scheme              Enum ROEScheme           -- WCA or RMA, copied from Client at
+                                               --   generation time so historical rows
+                                               --   are stable if the client later moves
+  period_start        date                     -- 1 March of (filing_year - 1)
+  period_end          date                     -- 28/29 Feb of filing_year
+  surface_date        date                     -- 1 April of filing_year
+  due_date            date                     -- 30 June of filing_year
+  status              ROEFilingStatus          -- new enum, default PENDING
+  is_billable         bool                     -- default True; generic obligation flag
+  annual_turnover     Decimal | None           -- captured at/before filing
+  number_of_workers   int | None               -- captured at/before filing
+  assessable_earnings Decimal | None           -- total payroll after per-employee ceiling
+  expected_assessment Decimal | None           -- computed: see assessment estimation below
+  notes               Text | None
+  assignee_id         FK staff.id              -- defaults to Tsego's staff record
+                                               --   ON DELETE SET NULL
+  created_at, updated_at
+```
+
+- Composite uniqueness on `(client_id, filing_year)`.
+- Composite index on `(status, due_date)` for overdue / due-soon dashboard queries.
+- Idempotency: re-running the generator at year boundary is safe.
+
+### Data pre-population from IT14 work (see Amendment to Ticket 4a below)
+
+Tsego's two required inputs — annual turnover and number of workers — are known to the accounting staff at IT14 preparation time. Rather than Tsego chasing these figures each April, the IT14 workflow captures them and the ROE instance consumes them:
+
+- When staff complete an IT14 submission (Ticket 4a), the submission step prompts for `annual_turnover` and `number_of_workers` (see amendment below).
+- When the ROE generator creates the next filing-year instance, it pre-populates `annual_turnover` and `number_of_workers` from the client's most recent IT14Instance where those fields are set. Tsego reviews and adjusts before filing (the IT14 figure is financial-year turnover; the ROE wants calendar-year earnings — close enough as a starting figure per firm practice, and always editable).
+
+### Assessment estimation (tariff-based)
+
+Per Niel and Tsego (7 July 2026): with a tariff code recorded per client, the PMS can estimate each client's assessment before the scheme issues it — letting the firm warn clients of the liability in advance and sanity-check the scheme's invoice.
+
+**Calculation (2025/26 constants, per GG 44409 and the current tariff notice):**
+
+```
+capped_earnings     = sum over employees of min(earnings, ceiling)   -- ceiling R633,168 p.a. per employee
+raw_assessment      = capped_earnings × class_rate / 100
+expected_assessment = max(raw_assessment, minimum)                    -- minimum R1,621 commercial / R560 domestic (Class M)
+```
+
+The PMS holds a small reference table and two constants per assessment year:
+
+```
+roe_tariffs:
+  subclass_code     str(4) PK part            -- e.g., 1340 Engineering
+  assessment_year   int    PK part            -- e.g., 2026 (year of assessment ending Feb 2026)
+  class_letter      str(1)                    -- A through M
+  industry_name     str(60)
+  rate_per_100      Decimal                   -- e.g., 1.16 for Class L in 2025/26
+
+roe_assessment_constants:
+  assessment_year        int PK
+  earnings_ceiling       Decimal              -- R633,168 for 2025/26
+  minimum_commercial     Decimal              -- R1,621 for 2025/26
+  minimum_domestic       Decimal              -- R560 for 2025/26
+```
+
+Seeded from the 2025/26 published rates (workbook prepared 7 July 2026: 103 subclass codes across 13 classes). Updated annually when the new tariff notice is gazetted — same annual-entry pattern as `sars_filing_deadlines`.
+
+New `Client` field: `roe_tariff_code: str(4) | None` — the Compensation Fund subclass assigned to the employer at registration. Tsego populates from her records via the prepared workbook (Client Tariff Codes sheet, 94 clients). The generator copies the code onto each instance at generation time; the estimation runs when `assessable_earnings` (or `annual_turnover` as a proxy) is entered.
+
+**RMA rates:** the published table covers the Compensation Fund (WCA/COIDA). RMA sets its own rates per industry; estimation for the 15 RMA clients activates once Tsego supplies RMA rate data. Until then, RMA instances track deadline and status only.
+
+### Status state machine
+
+```
+PENDING → SUBMITTED → CLOSED
+```
+
+Three states, matching the EMP501 pattern from Ticket 4f. No nil variant (no nil situations exist). No assessment lifecycle — the scheme-side assessment and any payment tracking is deferred (open question below). Reversible per the service-layer-only philosophy; idempotent transitions raise `ValueError`.
+
+### Dashboard placement
+
+ROE filings join the CIPC sections on Tsego's dashboard:
+
+- **"Return of Earnings — current season" section**, visible from `surface_date` (1 April), sorted by scheme then client. Overdue (past 30 June, not SUBMITTED) flagged red.
+- The instance detail page shows the two data inputs prominently, with a visual indicator of whether they were pre-populated from IT14 data or still blank.
+
+### Staff allocation
+
+**Centralised to Tsego** (assignee default), same as CIPC (Ticket 4g). Tsego's list shows occasional helpers (Quinlyn, Jeanne-Marie) on specific clients — reassignment per instance is supported, the default is Tsego.
+
+### Out of scope
+
+- Filing to CompEasy or the RMA portal (manual, online)
+- Letter of good standing tracking (possible future enhancement)
+- Payment-leg tracking of the scheme's assessment invoice (open question below)
+- New workmen's-compensation registrations (Task model, Ticket 3g)
+- Historical filings before the first PMS-tracked cycle (30 June 2027)
+
+### Schema implications
+
+1. **New table `roe_filing_instances`** per the schema above.
+2. **New enum `ROEScheme`** — `NONE`, `WCA`, `RMA`.
+3. **New enum `ROEFilingStatus`** — `PENDING`, `SUBMITTED`, `CLOSED`.
+4. **Add `roe_scheme: ROEScheme` (NOT NULL, default `NONE`) to `Client`.** Imported from Tsego's list (94 clients).
+5. **Add `roe_registration_number: str(20) | None` to `Client`.** Populated over time.
+6. **Add `roe_tariff_code: str(4) | None` to `Client`.** The Fund's subclass code; populated by Tsego via the tariff workbook.
+7. **New reference table `roe_tariffs`** — subclass rates per assessment year, seeded with the 2025/26 published table (103 subclasses, 13 classes).
+8. **New reference table `roe_assessment_constants`** — earnings ceiling and minimum assessments per assessment year.
+
+### Amendment to Ticket 4a (IT14) — capture box at submission
+
+Ticket 4a's `IT14Instance` gains two fields, captured via the submission form when staff mark an IT14 `SUBMITTED`:
+
+```
+IT14Instance.annual_turnover    Decimal | None
+IT14Instance.number_of_workers  int | None
+```
+
+Rationale (per Tsego and Niel, 7 July 2026): these figures exist at IT14 time and are exactly what next year's ROE filing needs. Capturing them at submission costs staff seconds and saves Tsego a per-client chase each April. The ROE generator pre-populates from the most recent IT14Instance carrying values. This amendment is planning-only, folded into 4a's implementation scope.
+
+### Decisions locked
+
+1. Separate `ROEFilingInstance` model — consistent with the per-obligation-type architecture of 4a–4g.
+2. Scheme (WCA vs RMA) is a per-client attribute (`Client.roe_scheme`), imported from Tsego's list — not rule-derived. Copied onto each instance at generation time.
+3. Calendar-year period; surface 1 April; hard deadline 30 June of the following year. No SARS-deadlines lookup.
+4. No nil-filing status — no nil situations exist per Tsego.
+5. Three-state machine (`PENDING → SUBMITTED → CLOSED`), matching EMP501.
+6. Centralised to Tsego (default assignee), per-instance reassignment supported.
+7. `annual_turnover` and `number_of_workers` are first-class fields on the instance, pre-populated from IT14 data where available (Amendment to Ticket 4a).
+8. First tracked cycle: filing year 2027 (calendar 2026).
+9. `is_billable` follows the generic default `True` from Ticket 4a.
+10. Assessment period is 1 March – 28/29 February (Gazette definition), not calendar year. Surface 1 April, due 30 June.
+11. Tariff-based assessment estimation is in scope: `Client.roe_tariff_code` + `roe_tariffs` + `roe_assessment_constants`, with the ceiling-then-rate-then-minimum formula. WCA rates seeded now; RMA estimation activates when RMA rates are supplied.
+
+### Open questions for implementation time
+
+- **RMA rate table.** Source RMA's per-industry rates so estimation covers the 15 RMA clients.
+- **Weekend roll on 30 June.** Does either scheme extend the deadline when 30 June falls on a weekend? Default: treat as immovable, surface early. Confirm with Tsego before the 2027 season.
+- **Payment leg.** After submission the scheme issues an assessment which the client pays (and a letter of good standing follows). Whether the PMS should track `ASSESSMENT_PAID` / good-standing status as additional states or leave it in `notes` — defer until Tsego has run one season on the PMS.
+- **Earnings vs turnover.** The ROE form technically wants employee earnings by band; Tsego works from annual turnover and worker count as her key figures. The PMS stores what Tsego uses; any refinement of the captured fields follows her real workflow after the first tracked season.
+- **RMA vs WCA portal differences.** Both currently share one model and one status flow. If the two schemes' workflows diverge in practice (different documents, different portals' quirks), revisit whether `scheme` needs behavioural differences beyond labelling.
+
+
+
+
 
 
 
