@@ -2699,7 +2699,7 @@ Rationale (per Tsego and Niel, 7 July 2026): these figures exist at IT14 time an
 
 1. Separate `ROEFilingInstance` model — consistent with the per-obligation-type architecture of 4a–4g.
 2. Scheme (WCA vs RMA) is a per-client attribute (`Client.roe_scheme`), imported from Tsego's list — not rule-derived. Copied onto each instance at generation time.
-3. Calendar-year period; surface 1 April; hard deadline 30 June of the following year. No SARS-deadlines lookup.
+3. Assessment-year period (1 March – 28/29 February); surface 1 April; hard deadline 30 June following the assessment year-end. No SARS-deadlines lookup..
 4. No nil-filing status — no nil situations exist per Tsego.
 5. Three-state machine (`PENDING → SUBMITTED → CLOSED`), matching EMP501.
 6. Centralised to Tsego (default assignee), per-instance reassignment supported.
