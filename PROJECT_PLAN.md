@@ -2717,6 +2717,139 @@ Rationale (per Tsego and Niel, 7 July 2026): these figures exist at IT14 time an
 - **Earnings vs turnover.** The ROE form technically wants employee earnings by band; Tsego works from annual turnover and worker count as her key figures. The PMS stores what Tsego uses; any refinement of the captured fields follows her real workflow after the first tracked season.
 - **RMA vs WCA portal differences.** Both currently share one model and one status flow. If the two schemes' workflows diverge in practice (different documents, different portals' quirks), revisit whether `scheme` needs behavioural differences beyond labelling.
 
+- ## Ticket 10 — Client data import
+
+**Goal.** Load the firm's client base into the PMS from the cleaned source lists — Tsego's CIPC company list (~447 companies) and the IT12 individuals list (~364 individuals, post-cleanup) — via a repeatable, idempotent CLI import, so the obligation engines have real clients to generate against. This is **step 1 of the four-step go-live path** (client load → deploy + credential ceremony → staff pilot → cutover).
+
+**Scope discipline.** A Flask CLI command with dry-run-by-default semantics, per-entity-type parsers, natural-key upsert, and a per-row data-quality report. The import never deletes, never merges rows silently, and only overwrites the fields it explicitly maps — manual edits to unmapped fields survive re-runs. Source lists are living documents (Dewald and Tsego continue enriching); the idempotent design exists precisely so updated lists re-import cleanly.
+
+### Grounding against the implemented Client model
+
+The ticket was drafted against `app/models/client.py` as it exists on main, not against the Phase-1 plan text. Findings that shape the design:
+
+1. **`Client` has no `id_number` field.** Individuals' SA ID / passport numbers have nowhere to live — and ID number is the natural key for individuals (ID number triggers IT12; registration number triggers IT14). **This ticket adds it.**
+2. **Three flags planned in Tickets 4b/4d/4e already exist under different names.** `has_provisional_tax` (model) serves 4d/4b's planned `is_provisional_taxpayer`; `has_paye` serves 4e's planned `is_paye_registered`. Those tickets should reuse the existing columns rather than adding duplicates — reconciliation notes below.
+3. **`EntityType.SOLE_PROP` already exists**, which supersedes 4b's planned `has_sole_prop_business` flag: individuals running a sole-prop business import as `entity_type = SOLE_PROP` with the business name in `trading_name`.
+4. Useful fields already present: `known_as` (surname-initials alias), `cipc_anniversary_month/day`, full contact block, `allocated_staff_id` (nullable — unallocated is a first-class state), the five `has_*` registration booleans.
+
+### Schema additions (this ticket)
+
+1. **Add `id_number: str(20) | None` to `Client`, indexed.** Accepts 13-digit SA IDs and alphanumeric passports. Never rejects non-13-digit values — foreign nationals hold passports, and silently dropping them loses clients.
+2. **Add `data_quality_note: Text | None` to `Client`.** Populated by the import when a row loads with a known issue (shared ID, unmapped staff name, malformed reg number). Cleared manually when the firm resolves the issue.
+
+No other columns. ROE fields (`roe_scheme`, `roe_tariff_code`, etc.) belong to Ticket 4h's implementation; `sars_industry_code` to 4a's; the import re-runs to populate them once those migrations exist.
+
+### Natural keys and upsert semantics
+
+| Entity type | Natural key | Notes |
+|---|---|---|
+| PTY_LTD, CC, NPC, INC | `registration_number` | Normalised to `YYYY/NNNNNN/NN` before matching |
+| INDIVIDUAL, SOLE_PROP | `id_number` | 13-digit SA ID or passport, whitespace-stripped |
+| TRUST | `registration_number` if present, else exact `legal_name` | Fewer than 8 active trusts — manual fallback acceptable |
+
+- Key found → **update** mapped fields on the existing row.
+- Key not found → **insert** a new row.
+- **Never delete.** Clients absent from a re-imported list are reported, not deactivated — deactivation is a human decision.
+- **Intra-file duplicate keys** (e.g. two rows sharing one ID): the first row loads, subsequent rows are *not* upserted (which would silently merge two people); they are skipped, reported, and the loaded row gets a `data_quality_note`. The remaining shared-ID pairs from the IT12 cleanup surface here for manual resolution.
+
+### Source files and field mapping (Phase A)
+
+**File 1 — Tsego's CIPC canonical CSV (~447 companies):**
+
+| Source column | Client field | Rule |
+|---|---|---|
+| Company name | `legal_name` | Suffix-normalised name as cleaned |
+| Reg Number | `registration_number` | Also derives `entity_type`: `/07`→PTY_LTD, `/23`→CC, `/08`→NPC, `/21`→INC, `/06`→NPC (Section 21) |
+| CIPC Month (+ day where present) | `cipc_anniversary_month/day` | Drives Ticket 4g generation |
+| Email | `email` | |
+| Staff Member | `allocated_staff_id` | Name → staff lookup (below) |
+| — | `has_income_tax = True` | All statutory entities are income-tax registered |
+
+**File 2 — IT12 individuals list (~364 rows, latest version):**
+
+| Source column | Client field | Rule |
+|---|---|---|
+| Surname, Initials | `legal_name` | Firm convention for individuals |
+| Full name | `known_as` | Disambiguation alias |
+| ID Number | `id_number` | Natural key; SA ID or passport |
+| Income Tax number | `tax_ref` | Text-preserved leading zeros; blank = own-profile client (legitimate, no flag) |
+| Email address | `email` | |
+| Staff member | `allocated_staff_id` | Name → staff lookup |
+| Source (Director / Other return) | — | Report metadata only; not stored |
+| has-sole-prop-business (business name) | `entity_type = SOLE_PROP`, `trading_name` = business name | Otherwise `entity_type = INDIVIDUAL` |
+| is-provisional-taxpayer (Y) | `has_provisional_tax = True` | Existing column — no new flag |
+| — | `has_income_tax = True` where `tax_ref` present | |
+
+**File 3 — Trusts (fewer than 8 rows):** small CSV or manual capture through the existing client form; `entity_type = TRUST`, `year_end_month/day = 2/28`. Not worth parser engineering at this scale.
+
+**Deferred to re-runs (Phase B):** Dewald's enriched Master Client List (year-ends, industry codes) merges by `registration_number` when he completes; the ROE list (94 clients, WCA/RMA scheme) and Tsego's tariff codes import once Ticket 4h's columns exist.
+
+### Staff-name mapping
+
+Prerequisite: the `staff` table is seeded with the firm's staff (already required by the credential ceremony in the go-live path). The import maps source names to `staff.id` case-insensitively with whitespace trimmed ("Niel " → Niel). Unknown or blank names → `allocated_staff_id = NULL` plus a `data_quality_note` and a report line — unallocated is first-class, but every unallocated client is surfaced, never hidden.
+
+### CLI design
+
+```
+flask import-clients companies  <path>            # dry-run: parse, validate, print report
+flask import-clients companies  <path> --commit   # apply in one transaction
+flask import-clients individuals <path> [--commit]
+```
+
+- **Dry-run is the default**; `--commit` is explicit. Matches the project's show-first discipline.
+- The report prints: inserted / updated / skipped-duplicate / flagged counts, then per-row issues (row number, name, issue). Also written to a timestamped file under `var/import-reports/`.
+- Whole file applies in a single transaction; unexpected errors roll back cleanly. Data-quality issues do **not** abort — they flag (Decision 4).
+- Re-running with a corrected file updates rows in place by natural key.
+
+### Validation rules
+
+- `legal_name` required (existing model validator enforces).
+- `registration_number` normalised; malformed formats load with `data_quality_note`.
+- `id_number`: 13-digit SA IDs validated by length/digits; passports accepted as-is; company-reg-shaped values in the ID column flagged.
+- Duplicate natural keys within a file: first loads, rest skipped + reported (see upsert semantics).
+- Nothing is silently dropped. A dropped client is a missed return.
+
+### Plan-reconciliation notes (for Tickets 4a–4h at implementation time)
+
+1. **4d / 4b:** reuse existing `Client.has_provisional_tax` — do not add `is_provisional_taxpayer`.
+2. **4e:** reuse existing `Client.has_paye` — do not add `is_paye_registered`.
+3. **4b:** sole-prop distinction is `entity_type = SOLE_PROP` (+ `trading_name`) — do not add `has_sole_prop_business`. Dashboard filter targets the entity type.
+4. **4c:** `files_itr12t`, **4a:** `sars_industry_code`, **4g:** `annual_turnover_band`, **4h:** `roe_scheme` / `roe_registration_number` / `roe_tariff_code` — all remain with their owning tickets; the import gains mappings for them when those migrations land.
+
+### Out of scope
+
+- Admin-UI upload screen (CLI first; UI later if staff need self-service)
+- Contact enrichment beyond the source lists' email columns (QuickBooks contact export merge is a future re-run)
+- Deactivation / archival of clients absent from lists
+- Obligation-instance backfill (each obligation ticket's generator handles its own first run)
+- Beneficial-owner linkage (Ticket 7)
+
+### Suggested implementation chunks (3g pattern)
+
+- **Chunk 1:** migration (`id_number`, `data_quality_note`) + parsers + dry-run report. No writes. Tests: parser fixtures, entity-type derivation, staff mapping, duplicate detection.
+- **Chunk 2:** upsert + `--commit` + transaction handling + report file. Tests: insert/update idempotency (run twice, second run reports 0 inserts), never-delete, flag behaviour.
+
+### Decisions locked
+
+1. Flask CLI command with dry-run default and explicit `--commit`. Admin-UI upload deferred.
+2. Tsego's CIPC list loads now as the company backbone; Dewald's enrichment merges later by `registration_number`. No waiting.
+3. Sole props import as `entity_type = SOLE_PROP` with the business name in `trading_name` — supersedes 4b's planned flag.
+4. Validation failures load with `data_quality_note` + report; intra-file duplicate keys skip-and-report rather than silently merging. Nothing dropped without a trace.
+5. New `Client.id_number` (indexed) is the individuals' natural key; accepts SA IDs and passports.
+6. Upsert only touches mapped fields; never deletes; re-runnable as lists improve.
+7. Existing columns are reused where planned tickets duplicated them (`has_provisional_tax`, `has_paye`, `SOLE_PROP`).
+8. Trusts entered manually or via micro-CSV — no parser engineering for fewer than 8 rows.
+9. Import runs locally first, then against the deployed server database as go-live step 1.
+
+### Open questions for implementation time
+
+- **Staff seeding source** — seed the 8 staff rows via a fixture script or manual entry before first import. Trivial either way; decide at implementation.
+- **Report retention** — keep every import report indefinitely under `var/import-reports/` or prune. Default: keep (they're small, and they're audit trail).
+- **QuickBooks contact merge** — the QB export carries phone numbers and addresses the source lists lack; a Phase-B re-run mapping by name/reg number. Design when needed.
+- **`/06` suffix mapping** — confirmed rare; verify NPC treatment against an actual example when one appears in the data.
+
+
+
 
 
 
