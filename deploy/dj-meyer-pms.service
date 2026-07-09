@@ -1,0 +1,29 @@
+[Unit]
+Description=DJ Meyer PMS (gunicorn/Flask)
+After=network-online.target postgresql.service
+Wants=network-online.target postgresql.service
+
+[Service]
+Type=notify
+NotifyAccess=main
+User=pms
+Group=pms
+WorkingDirectory=/opt/dj-meyer-pms
+ExecStart=/opt/dj-meyer-pms/.venv/bin/gunicorn --workers 4 --bind 127.0.0.1:8000 --timeout 60 run:app
+ExecReload=/bin/kill -s HUP $MAINPID
+Restart=on-failure
+RestartSec=5
+KillMode=mixed
+
+# hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target
