@@ -14,6 +14,7 @@ from sqlalchemy import (
     Integer,
     SmallInteger,
     String,
+    Text,
     event,
     func,
 )
@@ -62,6 +63,10 @@ class Client(db.Model):
     entity_type: Mapped[EntityType] = mapped_column(Enum(EntityType), nullable=False)
     registration_number: Mapped[str | None] = mapped_column(String(50))
     tax_ref: Mapped[str | None] = mapped_column(String(50))
+    # SA ID (13 digits) or passport for individuals — the natural key that triggers
+    # ITR12, indexed for import-upsert lookups. Nullable: companies key on
+    # registration_number instead. No 13-digit check (foreign nationals hold passports).
+    id_number: Mapped[str | None] = mapped_column(String(20), index=True)
     vat_number: Mapped[str | None] = mapped_column(String(50))
     paye_number: Mapped[str | None] = mapped_column(String(50))
     # Primary contact details, structured to match the firm's contact export
@@ -88,6 +93,10 @@ class Client(db.Model):
     bbee_applicable: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     client_since: Mapped[date | None] = mapped_column(Date)
+    # Free-text flag set by the client import when a row loads with a known issue
+    # (shared ID number, unmapped staff name, malformed registration number). Cleared
+    # manually once resolved. NULL = no known data-quality issue.
+    data_quality_note: Mapped[str | None] = mapped_column(Text)
     # Stored UTC; display in Africa/Johannesburg when shown to users
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

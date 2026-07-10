@@ -2849,6 +2849,17 @@ flask import-clients individuals <path> [--commit]
 - Duplicate natural keys within a file: first loads, rest skipped + reported (see upsert semantics).
 - Nothing is silently dropped. A dropped client is a missed return.
 
+### VAT go-live reconciliation (operational prerequisite)
+
+Before VAT201 generation is switched on against imported clients, the firm must
+reconcile its actual VAT-filing book against the imported has_vat=True set (~148
+A/B/C companies). The is_Vat_category source column is incomplete/messy ("Own",
+"Not registered", and 228 blanks all import as has_vat=False). Any VAT client the
+firm actually files for that is missing from the has_vat=True set gets its category
+fixed in the source list and re-imported (the idempotent upsert makes this safe).
+Until this reconciliation is done, VAT201 obligations must not be generated from
+import data alone.
+
 ### Plan-reconciliation notes (for Tickets 4a–4h at implementation time)
 
 1. **4d / 4b:** reuse existing `Client.has_provisional_tax` — do not add `is_provisional_taxpayer`.
