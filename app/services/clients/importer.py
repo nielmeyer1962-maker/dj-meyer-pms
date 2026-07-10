@@ -139,14 +139,30 @@ def classify_id_number(raw: str | None) -> tuple[str | None, str | None]:
     return cleaned, None
 
 
-def parse_vat_category(value: str | None) -> tuple[VatCategory | None, str | None]:
-    """A–E -> VatCategory; blank -> None; anything else -> None + issue."""
+_VAT_NOT_REGISTERED = {"not registered", "none", "no"}
+_VAT_OWN = {"own"}
+
+
+def derive_vat(value: str | None) -> tuple[bool, VatCategory | None, str | None, str | None]:
+    """Map the messy is_Vat_category column -> (has_vat, category, note, issue).
+
+    A-E            -> (True, category, None, None)
+    blank / "Not registered" -> (False, None, None, None)   # not our VAT work, silent
+    "Own"          -> (False, None, "handles own VAT", None) # client files own VAT
+    anything else  -> (False, None, None, issue)             # genuinely unexpected
+    """
     if not value or not value.strip():
-        return None, None
+        return False, None, None, None
+    text = value.strip()
+    key = text.casefold()
+    if key in _VAT_OWN:
+        return False, None, "handles own VAT", None
+    if key in _VAT_NOT_REGISTERED:
+        return False, None, None, None
     try:
-        return VatCategory[value.strip().upper()], None
+        return True, VatCategory[text.upper()], None, None
     except KeyError:
-        return None, f"unrecognised VAT category {value.strip()!r}"
+        return False, None, None, f"unrecognised VAT value {text!r}"
 
 
 def _parse_day(value: str | None) -> tuple[int | None, str | None]:
@@ -238,11 +254,13 @@ def map_company_row(
     fields["year_end_month"] = ye_month
     fields["year_end_day"] = ye_day
 
-    vat_category, vat_issue = parse_vat_category(values.get(CO_VAT))
+    has_vat, vat_category, vat_note, vat_issue = derive_vat(values.get(CO_VAT))
+    fields["has_vat"] = has_vat
+    fields["vat_category"] = vat_category
+    if vat_note:
+        issues.append(vat_note)
     if vat_issue:
         issues.append(vat_issue)
-    fields["has_vat"] = vat_category is not None
-    fields["vat_category"] = vat_category
     # NB: vat_submission_method deliberately unset here — the source has no such column and
     # the model pairs category+method. Resolved as a Chunk-2 (--commit) decision, not here.
 
