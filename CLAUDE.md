@@ -22,19 +22,27 @@ If a new requirement seems to drift toward any of the above, stop and confirm wi
 
 ### People and roles
 
-| Code | Name | Email | Dept / role | Notes |
-|------|------|-------|-------------|-------|
-| NIEL | Niel Meyer (Daniel Jacobus Meyer) | niel@djmeyer.co.za | Tax & Accounting — **Principal / owner** | Involved in everything except secretarial. SAIPA No. 03393. |
-| JEANNE | Jeanne-Marie Meyer | jeanne-marie@djmeyer.co.za | Tax & Accounting — **Assistant Principal** | Niel's daughter; successor / future owner. SAIPA No. 62098. |
-| CANDI | Candice van der Merwe | candice@djmeyer.co.za *(TBC)* | Tax & Accounting | |
-| STACY | Stacy Roux | stacy@djmeyer.co.za | Tax & Accounting (tax) | Married to Dewald. |
-| QUINLYN | Quinlyn Breedske | quinlyn@djmeyer.co.za | Tax & Accounting | |
-| CAROLINE | Caroline Lombard | caroline@djmeyer.co.za | Tax & Accounting | |
-| DEWALD | Dewald Roux | dewald@djmeyer.co.za *(TBC)* | Tax & Accounting (back office) | Stacy's husband. Supports Candice & Stacy; converts source data to Excel for import into **CaseWare** (where final AFS are prepared). Not client-allocated. |
-| TSEGO | Tsego Mogale | tsego@djmeyer.co.za | Secretarial (runs the dept) | CIPC compliance, Beneficial Ownership, **Workmen's Compensation (COIDA)**, and SARS registrations. |
+The canonical staff roster — **codes, full names, roles, and emails** — lives in **`seed.py`**
+(the idempotent seed script) and is the **single source of truth**. Do **not** re-hardcode the
+list here: a stale copy with a misspelt code (`STACY` instead of the correct **`STACEY`**)
+nearly caused a wrong import seed on 2026-07-10.
+
+`seed.py` is **gitignored** (it carries staff emails — POPIA) and lives only in the local
+working copy and on the claudedb server. To read or change the roster, open `seed.py` there;
+re-run `python seed.py` (idempotent) to apply. As of 2026-07-10 it is **9 rows**: the 8
+tax/secretarial staff plus a shared **`RECEPTION`** front-desk login.
+
+Context not captured by `seed.py`:
+- **Niel Meyer** — Principal / owner (SAIPA No. 03393); involved in everything except secretarial.
+- **Jeanne-Marie Meyer** — Assistant Principal (SAIPA No. 62098); Niel's daughter and successor.
+- **Stacey Roux** & **Dewald Roux** — married; Dewald is back-office (converts source data to
+  Excel for **CaseWare**), not client-allocated.
+- **Tsego Mogale** — runs Secretarial: CIPC, Beneficial Ownership, Workmen's Compensation
+  (COIDA), and SARS registrations.
+- **RECEPTION** — shared front-desk login; standard rights, never admin.
 
 `StaffRole` enum mapping: Tax & Accounting → `TAX`, Secretarial → `SECRETARIAL`.
-`BOTH` is reserved for anyone working across both departments — nobody currently.
+`BOTH` is used by the shared `RECEPTION` login (works across both departments).
 The firm is **SAIPA-registered, Practice No. 03393**, at 6 Eleventh Avenue, Northmead, Benoni 1500.
 
 ### How the work is divided
