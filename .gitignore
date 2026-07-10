@@ -26,6 +26,10 @@ htmlcov/
 # Local dev scripts
 seed.py
 
+# Import run artefacts — timestamped data-quality reports written by `flask
+# import-clients` (may echo client names; POPIA — keep out of git).
+/var/
+
 # Client data — never commit (POPIA). Raw client spreadsheets/exports stay on Y:\.
 *.xlsx
 *.xls

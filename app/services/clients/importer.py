@@ -353,13 +353,14 @@ class ImportReport:
     def flagged(self) -> list[ParsedRow]:
         return [row for row in (self.to_insert + self.to_update) if row.issues]
 
-    def render(self) -> str:
+    def render(self, committed: bool = False) -> str:
+        mode = "COMMIT - changes written" if committed else "DRY RUN - no changes written"
         lines = [
-            f"Client import - {self.kind} (DRY RUN - no changes written)",
+            f"Client import - {self.kind} ({mode})",
             f"  source rows (non-empty): {self.source_rows}",
             f"  real rows (named):       {self.real_rows}",
-            f"  would insert:            {len(self.to_insert)}",
-            f"  would update:            {len(self.to_update)}",
+            f"  matched for insert:      {len(self.to_insert)}",
+            f"  matched for update:      {len(self.to_update)}",
             f"  skipped duplicates:      {len(self.duplicates)}",
             f"  flagged (data-quality):  {len(self.flagged)}",
         ]
