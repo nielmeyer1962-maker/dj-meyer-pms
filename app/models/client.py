@@ -55,6 +55,10 @@ class Client(db.Model):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     legal_name: Mapped[str] = mapped_column(String(200), nullable=False)
     trading_name: Mapped[str | None] = mapped_column(String(200))
+    # Short alias shown beside the formal name (individuals are stored as
+    # "Surname, Initials") to disambiguate clients who share one — e.g. which
+    # "Smit, J". Optional; free text.
+    known_as: Mapped[str | None] = mapped_column(String(100))
     entity_type: Mapped[EntityType] = mapped_column(Enum(EntityType), nullable=False)
     registration_number: Mapped[str | None] = mapped_column(String(50))
     tax_ref: Mapped[str | None] = mapped_column(String(50))

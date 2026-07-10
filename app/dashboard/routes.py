@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from datetime import timedelta
-
 from flask import Blueprint, abort, flash, redirect, render_template, request, url_for
+from flask_login import current_user
+from sqlalchemy import or_
 from sqlalchemy.orm import selectinload
 
 from app.dashboard.forms import NotesForm, ReassignForm
@@ -12,7 +12,19 @@ from app.models.cipc import CIPCAnnualInstance
 from app.models.client import Client
 from app.models.obligation import ObligationInstance, ObligationStatus, ObligationType
 from app.models.staff import Staff
-from app.services.cipc.predicates import overdue_filter as cipc_overdue_filter
+from app.models.status_event import (
+    EVENT_REASSIGN,
+    EVENT_TRANSITION,
+    KIND_CIPC,
+    KIND_OBLIGATION,
+    StatusEvent,
+)
+from app.services.cipc.predicates import (
+    due_window_filter as cipc_due_window_filter,
+)
+from app.services.cipc.predicates import (
+    overdue_filter as cipc_overdue_filter,
+)
 from app.services.cipc.transitions import (
     mark_ar_submitted as cipc_mark_ar_submitted,
 )
@@ -31,7 +43,13 @@ from app.services.cipc.transitions import (
 from app.services.cipc.transitions import (
     mark_invoiced as cipc_mark_invoiced,
 )
-from app.services.obligations.predicates import is_overdue, overdue_filter
+from app.services.obligations.predicates import (
+    due_window_filter as obligation_due_window_filter,
+)
+from app.services.obligations.predicates import (
+    is_overdue,
+    overdue_filter,
+)
 from app.services.obligations.transitions import (
     mark_exempt,
     mark_in_progress,
@@ -39,7 +57,7 @@ from app.services.obligations.transitions import (
     mark_submitted,
     revert_to_pending,
 )
-from app.utils.dates import today_sast
+from app.utils.dates import to_sast, today_sast
 from app.utils.staff import UNASSIGNED_SENTINEL, get_active_staff
 
 bp = Blueprint("dashboard", __name__, url_prefix="/dashboard")
@@ -75,6 +93,120 @@ def _reassign_choices(active_staff: list[Staff]) -> list[tuple[str, str]]:
     return choices
 
 
+# Due-window selector — the single date-scope control (replaces the old "View").
+# Each forward key means "overdue OR due within N days"; "overdue" is past-due only and
+# "all" applies no date bound. d60 is the default working view. Applied IN SQL to both
+# row sources so the dashboard fetches only what falls in the window.
+_WINDOW_DAYS = {"this_week": 7, "d30": 30, "d60": 60, "m12": 365}
+_DEFAULT_WINDOW = "d60"
+_WINDOW_CHOICES = [
+    ("overdue", "Overdue"),
+    ("this_week", "This week"),
+    ("d30", "30 days"),
+    ("d60", "60 days"),
+    ("m12", "12 months"),
+    ("all", "All"),
+]
+_WINDOW_KEYS = frozenset(key for key, _ in _WINDOW_CHOICES)
+
+
+def _resolve_window(raw: str) -> str:
+    """Normalise the window arg; unknown/empty falls back to the default working view."""
+    key = (raw or "").lower()
+    return key if key in _WINDOW_KEYS else _DEFAULT_WINDOW
+
+
+def _obligation_window_clause(window: str, today):
+    if window == "all":
+        return None
+    if window == "overdue":
+        return overdue_filter(today)
+    return obligation_due_window_filter(today, _WINDOW_DAYS[window])
+
+
+def _cipc_window_clause(window: str, today):
+    if window == "all":
+        return None
+    if window == "overdue":
+        return cipc_overdue_filter(today)
+    return cipc_due_window_filter(today, _WINDOW_DAYS[window])
+
+
+def _obligation_select(filters: dict, window: str, today):
+    """Filtered SELECT for obligation rows, or None when the Type filter excludes
+    obligations. No ORDER BY / loader options — callers add what each use needs (rows vs
+    COUNT) so the WHERE logic is defined exactly once and rows and counts can't drift."""
+    type_arg = filters["type"]
+    if not (type_arg == "" or type_arg in ObligationType.__members__):
+        return None
+    stmt = (
+        db.select(ObligationInstance)
+        .join(Client, ObligationInstance.client_id == Client.id)
+        .where(Client.active.is_(True))
+    )
+    if filters["status"] in ObligationStatus.__members__:
+        stmt = stmt.where(ObligationInstance.status == ObligationStatus[filters["status"]])
+    if type_arg in ObligationType.__members__:
+        stmt = stmt.where(ObligationInstance.obligation_type == ObligationType[type_arg])
+    if filters["client_id"] is not None:
+        stmt = stmt.where(ObligationInstance.client_id == filters["client_id"])
+    elif filters["client_q"]:
+        term = f"%{filters['client_q']}%"
+        stmt = stmt.where(or_(Client.legal_name.ilike(term), Client.known_as.ilike(term)))
+    if filters["assignee"] == UNASSIGNED_SENTINEL:
+        stmt = stmt.where(ObligationInstance.assignee_id.is_(None))
+    elif filters["assignee_id"] is not None:
+        stmt = stmt.where(ObligationInstance.assignee_id == filters["assignee_id"])
+    clause = _obligation_window_clause(window, today)
+    if clause is not None:
+        stmt = stmt.where(clause)
+    return stmt
+
+
+def _cipc_select(filters: dict, window: str, today):
+    """Filtered SELECT for CIPC rows, or None when the Type filter excludes them. CIPC
+    visibility is governed by the Type filter alone (Status narrows obligations only)."""
+    if filters["type"] not in ("", _CIPC_TYPE_ARG):
+        return None
+    stmt = (
+        db.select(CIPCAnnualInstance)
+        .join(Client, CIPCAnnualInstance.client_id == Client.id)
+        .where(Client.active.is_(True))
+    )
+    if filters["client_id"] is not None:
+        stmt = stmt.where(CIPCAnnualInstance.client_id == filters["client_id"])
+    elif filters["client_q"]:
+        term = f"%{filters['client_q']}%"
+        stmt = stmt.where(or_(Client.legal_name.ilike(term), Client.known_as.ilike(term)))
+    if filters["assignee"] == UNASSIGNED_SENTINEL:
+        stmt = stmt.where(CIPCAnnualInstance.assignee_id.is_(None))
+    elif filters["assignee_id"] is not None:
+        stmt = stmt.where(CIPCAnnualInstance.assignee_id == filters["assignee_id"])
+    clause = _cipc_window_clause(window, today)
+    if clause is not None:
+        stmt = stmt.where(clause)
+    return stmt
+
+
+def _count(core) -> int:
+    """COUNT(*) over a core SELECT's filters — never len() over fetched rows."""
+    if core is None:
+        return 0
+    return db.session.scalar(db.select(db.func.count()).select_from(core.subquery())) or 0
+
+
+_PAGE_SIZE = 50
+
+
+def _parse_page(raw: str) -> int:
+    """Page param: a positive int, defaulting to 1 on anything invalid."""
+    try:
+        page = int(raw)
+    except (TypeError, ValueError):
+        return 1
+    return page if page >= 1 else 1
+
+
 @bp.get("/")
 def list_obligations():
     today = today_sast()
@@ -83,118 +215,107 @@ def list_obligations():
     # --- Filter parsing — raw query-string per locked decision §9. ---
     status_arg = request.args.get("status", "").upper()
     assignee_arg = request.args.get("assignee", "")
-    view_arg = request.args.get("view", "")
     type_arg = request.args.get("type", "")
     client_arg = request.args.get("client", "")
+    client_q = request.args.get("client_q", "").strip()
+    window = _resolve_window(request.args.get("window", ""))
 
-    # Client dropdown lists every client; the filter narrows both row kinds to one client.
-    all_clients = db.session.scalars(db.select(Client).order_by(Client.legal_name)).all()
-    client_id_filter = next(
-        (cl.id for cl in all_clients if str(cl.id) == client_arg),
-        None,
+    # Client filter: an explicit client id (deep-link / preserved across actions) takes
+    # precedence over the search box. Validate the id is a real, active client via a single
+    # PK lookup — an unknown or non-numeric id is ignored (all clients), so a stale deep-link
+    # never blanks the list. No full client fetch (that was the dropdown's scale cost).
+    client_id_filter = None
+    if client_arg.isdigit():
+        candidate = db.session.get(Client, int(client_arg))
+        if candidate is not None and candidate.active:
+            client_id_filter = candidate.id
+    # Resolve an assignee code to a live staff id once, here, so both sources share it.
+    assignee_match = (
+        next((s for s in active_staff if s.code == assignee_arg), None) if assignee_arg else None
+    )
+    filters = {
+        "status": status_arg,
+        "type": type_arg,
+        "client_id": client_id_filter,
+        # The text search only applies when no explicit client id won precedence.
+        "client_q": client_q if client_id_filter is None else "",
+        "assignee": assignee_arg,
+        "assignee_id": assignee_match.id if assignee_match is not None else None,
+    }
+
+    ob_core = _obligation_select(filters, window, today)
+    cipc_core = _cipc_select(filters, window, today)
+
+    # Summary counts via SQL COUNT under the same filters — never len() over rows. The
+    # in-window total reflects the current window (and drives the pager); the overdue count
+    # forces window=overdue so it always reports true past-due work under the other filters.
+    total_count = _count(ob_core) + _count(cipc_core)
+    overdue_count = _count(_obligation_select(filters, "overdue", today)) + _count(
+        _cipc_select(filters, "overdue", today)
     )
 
-    stmt = (
-        db.select(ObligationInstance)
-        .options(
-            selectinload(ObligationInstance.client),
-            selectinload(ObligationInstance.assignee),
+    # Bounded merge pagination. To assemble global page N (rows [(N-1)*50, N*50) by due
+    # date) we need at most the first N*50 rows from EACH source: in the worst case the
+    # whole page comes from one source. So we LIMIT each query to page*50 in SQL, merge the
+    # two bounded lists, and slice — page 1 touches <= 100 rows regardless of book size.
+    # Both per-source orderings and the merge key are (due_date, client name, kind, id) so
+    # the merge is a total order with no duplicates or omissions across page boundaries.
+    total_pages = max(1, (total_count + _PAGE_SIZE - 1) // _PAGE_SIZE)
+    page = min(_parse_page(request.args.get("page", "1")), total_pages)
+    fetch_limit = page * _PAGE_SIZE
+
+    items = []
+    if ob_core is not None:
+        ob_stmt = (
+            ob_core.options(
+                selectinload(ObligationInstance.client),
+                selectinload(ObligationInstance.assignee),
+            )
+            .order_by(
+                ObligationInstance.submission_due_date.asc(),
+                Client.legal_name.asc(),
+                ObligationInstance.id.asc(),
+            )
+            .limit(fetch_limit)
         )
-        .join(Client, ObligationInstance.client_id == Client.id)
-        .order_by(ObligationInstance.submission_due_date.asc(), Client.legal_name.asc())
-    )
-
-    # Status: stored values only. "OVERDUE" is not a valid Status choice — it lives in View.
-    if status_arg in ObligationStatus.__members__:
-        stmt = stmt.where(ObligationInstance.status == ObligationStatus[status_arg])
-
-    # Type: an ObligationType name narrows obligations to that type.
-    if type_arg in ObligationType.__members__:
-        stmt = stmt.where(ObligationInstance.obligation_type == ObligationType[type_arg])
-
-    # Client: narrow to a single client (applies to both row kinds).
-    if client_id_filter is not None:
-        stmt = stmt.where(ObligationInstance.client_id == client_id_filter)
-
-    # Assignee: Unassigned sentinel, or an active staff code.
-    if assignee_arg == UNASSIGNED_SENTINEL:
-        stmt = stmt.where(ObligationInstance.assignee_id.is_(None))
-    elif assignee_arg:
-        staff_match = next((s for s in active_staff if s.code == assignee_arg), None)
-        if staff_match is not None:
-            stmt = stmt.where(ObligationInstance.assignee_id == staff_match.id)
-
-    # View: date-scoped derived slices. "All" means no extra clause.
-    if view_arg == "this_week":
-        stmt = stmt.where(
-            ObligationInstance.submission_due_date >= today,
-            ObligationInstance.submission_due_date <= today + timedelta(days=7),
-        )
-    elif view_arg == "next_30":
-        stmt = stmt.where(
-            ObligationInstance.submission_due_date >= today,
-            ObligationInstance.submission_due_date <= today + timedelta(days=30),
-        )
-    elif view_arg == "overdue":
-        stmt = stmt.where(overdue_filter(today))
-
-    # Map each ObligationInstance to the uniform DashboardItem the template renders. The
-    # query (filters, ordering, selectinload) is unchanged — only the row shape is.
-    # Obligations are dropped entirely when the Type filter selects the CIPC AR.
-    if type_arg == "" or type_arg in ObligationType.__members__:
-        items = [from_obligation(oi, today) for oi in db.session.scalars(stmt).all()]
-    else:
-        items = []
-
-    # Fold the CIPC Annual Returns into the same list. CIPC visibility is governed by the
-    # Type filter ALONE: included when Type is unset/All or the CIPC AR sentinel, excluded
-    # only when Type names a specific ObligationType (VAT201/EMP201). The Status filter
-    # narrows the obligation query only and never includes or excludes CIPC, so a
-    # type=CIPC AR view is never blanked by a stray Status value. Assignee + View filters
-    # apply to both, via the CIPC column equivalents (due_date, overdue predicate).
-    if type_arg in ("", _CIPC_TYPE_ARG):
+        items.extend(from_obligation(oi, today) for oi in db.session.scalars(ob_stmt).all())
+    if cipc_core is not None:
         cipc_stmt = (
-            db.select(CIPCAnnualInstance)
-            .options(
+            cipc_core.options(
                 selectinload(CIPCAnnualInstance.client),
                 selectinload(CIPCAnnualInstance.assignee),
             )
-            .join(Client, CIPCAnnualInstance.client_id == Client.id)
+            .order_by(
+                CIPCAnnualInstance.due_date.asc(),
+                Client.legal_name.asc(),
+                CIPCAnnualInstance.id.asc(),
+            )
+            .limit(fetch_limit)
         )
-        if client_id_filter is not None:
-            cipc_stmt = cipc_stmt.where(CIPCAnnualInstance.client_id == client_id_filter)
-        if assignee_arg == UNASSIGNED_SENTINEL:
-            cipc_stmt = cipc_stmt.where(CIPCAnnualInstance.assignee_id.is_(None))
-        elif assignee_arg:
-            staff_match = next((s for s in active_staff if s.code == assignee_arg), None)
-            if staff_match is not None:
-                cipc_stmt = cipc_stmt.where(CIPCAnnualInstance.assignee_id == staff_match.id)
-
-        if view_arg == "this_week":
-            cipc_stmt = cipc_stmt.where(
-                CIPCAnnualInstance.due_date >= today,
-                CIPCAnnualInstance.due_date <= today + timedelta(days=7),
-            )
-        elif view_arg == "next_30":
-            cipc_stmt = cipc_stmt.where(
-                CIPCAnnualInstance.due_date >= today,
-                CIPCAnnualInstance.due_date <= today + timedelta(days=30),
-            )
-        elif view_arg == "overdue":
-            cipc_stmt = cipc_stmt.where(cipc_overdue_filter(today))
-
         items.extend(from_cipc(ci, today) for ci in db.session.scalars(cipc_stmt).all())
+    items.sort(
+        key=lambda it: (it.due_date, it.client.legal_name if it.client else "", it.kind, it.id)
+    )
+    start = (page - 1) * _PAGE_SIZE
+    page_items = items[start : start + _PAGE_SIZE]
 
-    # Merge-sort the two row sources by due date, then client name — the same ordering the
-    # obligation-only list used before CIPC was folded in.
-    items.sort(key=lambda it: (it.due_date, it.client.legal_name if it.client else ""))
+    # Pager links preserve every active filter (drop the old page so it isn't duplicated).
+    base_args = {key: value for key, value in request.args.items() if key != "page"}
+    prev_url = (
+        url_for("dashboard.list_obligations", page=page - 1, **base_args) if page > 1 else None
+    )
+    next_url = (
+        url_for("dashboard.list_obligations", page=page + 1, **base_args)
+        if page < total_pages
+        else None
+    )
 
     reassign_form = ReassignForm()
     reassign_form.assignee_id.choices = _reassign_choices(active_staff)
 
     return render_template(
         "dashboard/list.html",
-        items=items,
+        items=page_items,
         obligation_action_endpoints=_OBLIGATION_ACTION_ENDPOINTS,
         cipc_action_endpoints=_CIPC_ACTION_ENDPOINTS,
         active_staff=active_staff,
@@ -203,15 +324,45 @@ def list_obligations():
         # Echo current filter values so the form repaints with the user's selection.
         current_status=status_arg,
         current_assignee=assignee_arg,
-        current_view=view_arg,
+        current_window=window,
         current_type=type_arg,
-        current_client=client_arg,
-        clients=all_clients,
+        current_client_q=client_q,
         statuses=list(ObligationStatus),
+        window_choices=_WINDOW_CHOICES,
+        total_count=total_count,
+        overdue_count=overdue_count,
+        # Pager state.
+        page=page,
+        total_pages=total_pages,
+        prev_url=prev_url,
+        next_url=next_url,
         # Type choices span both kinds: each ObligationType, plus the CIPC AR sentinel.
         type_choices=[(t.name, t.name) for t in ObligationType]
         + [(_CIPC_TYPE_ARG, CIPC_TYPE_LABEL)],
     )
+
+
+def _describe_event(e: StatusEvent) -> str:
+    verb = "Status" if e.event == EVENT_TRANSITION else "Reassigned"
+    return f"{verb}: {e.from_value} → {e.to_value}"
+
+
+def _obligation_history(instance_id: int) -> list[dict]:
+    """This obligation's audit events, newest first, as display-ready rows."""
+    events = db.session.scalars(
+        db.select(StatusEvent)
+        .options(selectinload(StatusEvent.actor))
+        .where(StatusEvent.kind == KIND_OBLIGATION, StatusEvent.instance_id == instance_id)
+        .order_by(StatusEvent.created_at.desc(), StatusEvent.id.desc())
+    ).all()
+    return [
+        {
+            "when": to_sast(e.created_at).strftime("%Y-%m-%d %H:%M"),
+            "actor": e.actor.full_name if e.actor else "—",
+            "description": _describe_event(e),
+        }
+        for e in events
+    ]
 
 
 @bp.get("/obligations/<int:obligation_id>")
@@ -241,6 +392,7 @@ def obligation_detail(obligation_id: int):
         is_overdue=is_overdue,
         notes_form=NotesForm(notes=instance.notes),
         reassign_form=reassign_form,
+        history=_obligation_history(instance.id),
     )
 
 
@@ -270,6 +422,7 @@ def update_obligation_notes(obligation_id: int):
             is_overdue=is_overdue,
             notes_form=form,
             reassign_form=reassign_form,
+            history=_obligation_history(instance.id),
         )
     raw = (form.notes.data or "").strip()
     instance.notes = raw if raw else None
@@ -296,13 +449,37 @@ def _redirect_after_action(instance_id: int):
     return _redirect_to_list_preserving_filters()
 
 
+def _stage_status_event(
+    kind: str, instance_id: int, event: str, from_value: str | None, to_value: str | None
+) -> None:
+    """Stage (don't commit) an audit row so it commits in the SAME transaction as the
+    change it records — the event and the change are atomic. The caller commits once."""
+    actor_id = current_user.id if current_user.is_authenticated else None
+    db.session.add(
+        StatusEvent(
+            kind=kind,
+            instance_id=instance_id,
+            event=event,
+            from_value=from_value,
+            to_value=to_value,
+            actor_staff_id=actor_id,
+        )
+    )
+
+
 def _apply_transition(obligation_id: int, action) -> None:
     instance = db.get_or_404(ObligationInstance, obligation_id)
+    from_status = instance.status.name
     try:
         action(instance)
     except ValueError as exc:
+        # Refused transition: roll back any partial mutation and write NO event.
+        db.session.rollback()
         flash(str(exc), "danger")
         return
+    _stage_status_event(
+        KIND_OBLIGATION, instance.id, EVENT_TRANSITION, from_status, instance.status.name
+    )
     db.session.commit()
     flash(f"Obligation {instance.id} → {instance.status.name}.", "success")
 
@@ -354,10 +531,25 @@ def _parse_assignee_id(raw: str) -> int | None:
     return staff.id
 
 
+def _assignee_code(staff_id: int | None) -> str:
+    """The staff code for an assignee id, or 'unassigned' for None."""
+    if staff_id is None:
+        return "unassigned"
+    staff = db.session.get(Staff, staff_id)
+    return staff.code if staff is not None else "unassigned"
+
+
 @bp.post("/obligations/<int:obligation_id>/reassign")
 def reassign_obligation(obligation_id: int):
     instance = db.get_or_404(ObligationInstance, obligation_id)
-    instance.assignee_id = _parse_assignee_id(request.form.get("assignee_id", ""))
+    from_code = _assignee_code(instance.assignee_id)
+    # _parse_assignee_id aborts(400) on an invalid target — before any event/commit, so a
+    # rejected reassign writes nothing.
+    new_id = _parse_assignee_id(request.form.get("assignee_id", ""))
+    instance.assignee_id = new_id
+    _stage_status_event(
+        KIND_OBLIGATION, instance.id, EVENT_REASSIGN, from_code, _assignee_code(new_id)
+    )
     db.session.commit()
     flash(f"Obligation {instance.id} reassigned.", "success")
     return _redirect_after_action(obligation_id)
@@ -370,11 +562,14 @@ def reassign_obligation(obligation_id: int):
 
 def _apply_cipc_transition(cipc_id: int, action) -> None:
     instance = db.get_or_404(CIPCAnnualInstance, cipc_id)
+    from_status = instance.status.name
     try:
         action(instance)
     except ValueError as exc:
+        db.session.rollback()
         flash(str(exc), "danger")
         return
+    _stage_status_event(KIND_CIPC, instance.id, EVENT_TRANSITION, from_status, instance.status.name)
     db.session.commit()
     flash(f"CIPC AR {instance.id} → {instance.status.name}.", "success")
 
@@ -418,7 +613,10 @@ def mark_cipc_declined(cipc_id: int):
 @bp.post("/cipc/<int:cipc_id>/reassign")
 def reassign_cipc(cipc_id: int):
     instance = db.get_or_404(CIPCAnnualInstance, cipc_id)
-    instance.assignee_id = _parse_assignee_id(request.form.get("assignee_id", ""))
+    from_code = _assignee_code(instance.assignee_id)
+    new_id = _parse_assignee_id(request.form.get("assignee_id", ""))
+    instance.assignee_id = new_id
+    _stage_status_event(KIND_CIPC, instance.id, EVENT_REASSIGN, from_code, _assignee_code(new_id))
     db.session.commit()
     flash(f"CIPC AR {instance.id} reassigned.", "success")
     return _redirect_to_list_preserving_filters()

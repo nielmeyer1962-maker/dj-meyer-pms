@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Settings — DJ Meyer PMS{% endblock %}
+{% block content %}
+<h1 class="h3 mb-4">Settings</h1>
+
+<form method="post" action="{{ url_for('settings.edit_settings') }}">
+  {{ form.hidden_tag() }}
+
+  <h2 class="h5 mb-3">ITR12 filing deadlines</h2>
+  <p class="text-muted">
+    The day and month each individual ITR12 is due. Provisional taxpayers file in January;
+    everyone else in October. The generator lands the due date in the right year and rolls
+    it forward off weekends and SA public holidays.
+  </p>
+
+  <fieldset class="mb-4">
+    <legend class="h6">Non-provisional (e.g. 23 October)</legend>
+    <div class="row g-2">
+      <div class="col-auto">
+        {{ form.nonprovisional_day.label(class="form-label") }}
+        {{ form.nonprovisional_day(class="form-control" + (" is-invalid" if form.nonprovisional_day.errors else ""), style="width:6rem") }}
+        {% if form.nonprovisional_day.errors %}
+          <div class="invalid-feedback">{% for e in form.nonprovisional_day.errors %}{{ e }}{% endfor %}</div>
+        {% endif %}
+      </div>
+      <div class="col-auto">
+        {{ form.nonprovisional_month.label(class="form-label") }}
+        {{ form.nonprovisional_month(class="form-control" + (" is-invalid" if form.nonprovisional_month.errors else ""), style="width:6rem") }}
+        {% if form.nonprovisional_month.errors %}
+          <div class="invalid-feedback">{% for e in form.nonprovisional_month.errors %}{{ e }}{% endfor %}</div>
+        {% endif %}
+      </div>
+    </div>
+  </fieldset>
+
+  <fieldset class="mb-4">
+    <legend class="h6">Provisional (e.g. 20 January)</legend>
+    <div class="row g-2">
+      <div class="col-auto">
+        {{ form.provisional_day.label(class="form-label") }}
+        {{ form.provisional_day(class="form-control" + (" is-invalid" if form.provisional_day.errors else ""), style="width:6rem") }}
+        {% if form.provisional_day.errors %}
+          <div class="invalid-feedback">{% for e in form.provisional_day.errors %}{{ e }}{% endfor %}</div>
+        {% endif %}
+      </div>
+      <div class="col-auto">
+        {{ form.provisional_month.label(class="form-label") }}
+        {{ form.provisional_month(class="form-control" + (" is-invalid" if form.provisional_month.errors else ""), style="width:6rem") }}
+        {% if form.provisional_month.errors %}
+          <div class="invalid-feedback">{% for e in form.provisional_month.errors %}{{ e }}{% endfor %}</div>
+        {% endif %}
+      </div>
+    </div>
+  </fieldset>
+
+  {{ form.submit(class="btn btn-primary") }}
+</form>
+{% endblock %}

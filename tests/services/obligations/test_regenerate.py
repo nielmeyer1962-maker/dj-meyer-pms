@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date
 
 from app.extensions import db
+from app.models.app_setting import APP_SETTING_SEED, AppSetting
 from app.models.client import Client, EntityType, VatCategory, VatSubmissionMethod
 from app.models.obligation import ObligationInstance, ObligationStatus, ObligationType
 from app.services.obligations.regenerate import RegenerateResult, regenerate
@@ -341,10 +342,17 @@ def test_regenerate_emits_vat201_and_emp201_together(app):
         rows = _all_for_client(c.id)
         vat = [r for r in rows if r.obligation_type is ObligationType.VAT201]
         emp = [r for r in rows if r.obligation_type is ObligationType.EMP201]
-        # 12 monthly VAT201 (Cat C) + 12 monthly EMP201 in the 12-month window.
+        emp501 = [
+            r
+            for r in rows
+            if r.obligation_type in (ObligationType.EMP501_INTERIM, ObligationType.EMP501_ANNUAL)
+        ]
+        # 12 monthly VAT201 (Cat C) + 12 monthly EMP201 in the 12-month window, plus the
+        # two PAYE-gated EMP501 reconciliations (interim + annual) for the current tax year.
         assert len(vat) == 12
         assert len(emp) == 12
-        assert result == RegenerateResult(added=24, updated=0, deleted=0)
+        assert len(emp501) == 2
+        assert result == RegenerateResult(added=26, updated=0, deleted=0)
 
 
 def test_regenerate_skips_emp201_when_not_paye_registered(app):
@@ -434,3 +442,105 @@ def test_regenerate_emits_and_preserves_itr14_across_years(app):
         )
         assert [r.period_end for r in itr14_rows] == [date(2026, 2, 28), date(2027, 2, 28)]
         assert db.session.get(ObligationInstance, first_id) is not None
+
+
+# --- ITR12 end-to-end through regenerate (Ticket 4b) ---
+
+
+def _seed_itr12_deadlines() -> None:
+    for row in APP_SETTING_SEED:
+        db.session.add(AppSetting(**row))
+    db.session.commit()
+
+
+def test_regenerate_emits_and_preserves_it12_across_years(app):
+    """An eligible individual gets one ITR12 for the most-recently-closed YoA, and on a
+    later regenerate (a year on) the prior-year ITR12 — still PENDING and now past-due —
+    survives the prune rather than being silently dropped."""
+    with app.app_context():
+        _seed_itr12_deadlines()
+        c = Client(
+            legal_name="Smit, J",
+            entity_type=EntityType.INDIVIDUAL,
+            has_income_tax=True,
+        )
+        db.session.add(c)
+        db.session.commit()
+
+        # First run: today 2026-06-11 → YoA closed 28 Feb 2026, non-prov due 23 Oct 2026.
+        regenerate(c, today=date(2026, 6, 11))
+        db.session.commit()
+        it12 = [r for r in _all_for_client(c.id) if r.obligation_type is ObligationType.ITR12]
+        assert len(it12) == 1
+        first = it12[0]
+        assert first.period_end == date(2026, 2, 28)
+        assert first.submission_due_date == date(2026, 10, 23)
+        assert first.status is ObligationStatus.PENDING
+        first_id = first.id
+
+        # A year later: today 2027-06-11 → new YoA closed 28 Feb 2027.
+        result = regenerate(c, today=date(2027, 6, 11))
+        db.session.commit()
+
+        # New ITR12 added; the prior-year one (past-due PENDING) is kept, not pruned.
+        assert result == RegenerateResult(added=1, updated=0, deleted=0)
+        it12_rows = sorted(
+            (r for r in _all_for_client(c.id) if r.obligation_type is ObligationType.ITR12),
+            key=lambda r: r.period_end,
+        )
+        assert [r.period_end for r in it12_rows] == [date(2026, 2, 28), date(2027, 2, 28)]
+        assert db.session.get(ObligationInstance, first_id) is not None
+
+
+def test_regenerate_skips_it12_for_non_individual(app):
+    """A company is never given an ITR12, even with income tax — the entity gate keeps
+    generate_it12 out before it touches settings."""
+    with app.app_context():
+        c = Client(
+            legal_name="Acme Pty Ltd",
+            entity_type=EntityType.PTY_LTD,
+            has_income_tax=True,
+        )
+        db.session.add(c)
+        db.session.commit()
+
+        regenerate(c, today=date(2026, 6, 11))
+        db.session.commit()
+
+        rows = _all_for_client(c.id)
+        assert not any(r.obligation_type is ObligationType.ITR12 for r in rows)
+
+
+# --- Archived client is inert (H1 chunk 2) ---
+
+
+def test_regenerate_on_archived_client_prunes_future_pending(app):
+    """Once a client is archived, its generators yield nothing, so regenerate adds 0 and
+    prunes its still-future PENDING rows by the existing rule — while terminal rows are
+    preserved as always."""
+    with app.app_context():
+        c = _make_client()  # active VAT Cat C client
+        regenerate(c, today=date(2026, 1, 1))
+        db.session.commit()
+        pendings = _pending_by_period_end(c.id)
+        assert len(pendings) == 12
+
+        # Mark one row SUBMITTED so we can confirm terminal rows survive the archive.
+        keep = pendings[date(2026, 6, 30)]
+        keep.status = ObligationStatus.SUBMITTED
+        db.session.commit()
+        keep_id = keep.id
+
+        c.active = False
+        db.session.commit()
+
+        result = regenerate(c, today=date(2026, 1, 1))
+        db.session.commit()
+
+        # Nothing generated; the 11 remaining future PENDING rows are pruned.
+        assert result.added == 0
+        assert result.deleted == 11
+        # Terminal row preserved; no PENDING rows remain.
+        kept = db.session.get(ObligationInstance, keep_id)
+        assert kept is not None and kept.status is ObligationStatus.SUBMITTED
+        assert _pending_by_period_end(c.id) == {}

@@ -122,8 +122,8 @@ def test_filter_by_assignee_unassigned_sentinel(client, world):
     assert "2026-01-31" not in body  # pending_overdue (Niel's) excluded
 
 
-def test_filter_view_overdue(client, world):
-    resp = client.get("/dashboard/?view=overdue")
+def test_filter_window_overdue(client, world):
+    resp = client.get("/dashboard/?window=overdue")
     assert resp.status_code == 200
     body = resp.data.decode()
     # only pending_overdue qualifies (PENDING + due < today)
@@ -133,13 +133,15 @@ def test_filter_view_overdue(client, world):
     assert "2026-04-30" not in body
 
 
-def test_filter_view_this_week(client, world):
-    resp = client.get("/dashboard/?view=this_week")
+def test_filter_window_this_week(client, world):
+    resp = client.get("/dashboard/?window=this_week")
     assert resp.status_code == 200
     body = resp.data.decode()
-    # pending_future (due TODAY+3) qualifies; the +10 / +20 / past rows do not.
+    # New semantics: "this week" = overdue OR due within 7 days. So pending_future
+    # (due TODAY+3, 2026-02-28) AND the overdue row (2026-01-31) both qualify; the
+    # +10 / +20 rows fall outside the window.
     assert "2026-02-28" in body
-    assert "2026-01-31" not in body
+    assert "2026-01-31" in body  # overdue is folded into every forward window
     assert "2026-03-31" not in body
     assert "2026-04-30" not in body
 
@@ -603,11 +605,11 @@ def test_mark_cipc_closed_from_ar_submitted(client, cipc_world):
 
 def test_cipc_action_redirect_preserves_filters(client, cipc_world):
     gid = cipc_world["generated_overdue_id"]
-    resp = client.post(f"/dashboard/cipc/{gid}/mark-invoiced?assignee=TSEGO&view=overdue")
+    resp = client.post(f"/dashboard/cipc/{gid}/mark-invoiced?assignee=TSEGO&window=overdue")
     assert resp.status_code == 302
     loc = resp.headers["Location"]
     assert "assignee=TSEGO" in loc
-    assert "view=overdue" in loc
+    assert "window=overdue" in loc
 
 
 def test_cipc_reassign_to_unassigned_sets_null(client, cipc_world):
@@ -635,17 +637,19 @@ def test_status_filter_leaves_cipc_visible(client, cipc_world):
 def test_cipc_ar_ignores_status(client, cipc_world):
     """type=CIPC_AR shows the CIPC rows regardless of a stray Status value — never a blank
     list. CIPC visibility is governed by the Type filter alone."""
-    resp = client.get("/dashboard/?type=CIPC_AR&status=PENDING")
+    # window=all so the past-but-filed AR_SUBMITTED row isn't bounded out by the default
+    # d60 window — this test is about the Status filter, not the date window.
+    resp = client.get("/dashboard/?type=CIPC_AR&status=PENDING&window=all")
     assert resp.status_code == 200
     body = resp.data.decode()
     assert "2026-05-08" in body  # generated_overdue still visible
     assert "2026-05-11" in body  # ar_submitted_past still visible
 
 
-def test_view_overdue_includes_only_overdue_cipc(client, cipc_world):
-    """view=overdue keeps the pre-filing past-due row; the past-but-filed AR_SUBMITTED row
-    and the future INVOICED row are excluded."""
-    resp = client.get("/dashboard/?view=overdue")
+def test_window_overdue_includes_only_overdue_cipc(client, cipc_world):
+    """window=overdue keeps the pre-filing past-due row; the past-but-filed AR_SUBMITTED
+    row and the future INVOICED row are excluded."""
+    resp = client.get("/dashboard/?window=overdue")
     body = resp.data.decode()
     assert "2026-05-08" in body  # generated_overdue, due TODAY-5
     assert "2026-05-11" not in body  # ar_submitted_past (filed → not overdue)
@@ -810,10 +814,12 @@ def test_client_filter_applies_to_cipc(client, two_client_world):
     assert two_client_world["a_due"] not in body
 
 
-def test_client_filter_repaints_selection(client, two_client_world):
-    a_id = two_client_world["a_id"]
-    body = client.get(f"/dashboard/?client={a_id}").data.decode()
-    assert f'<option value="{a_id}" selected>Acme Pty Ltd</option>' in body
+def test_client_filter_renders_search_input(client, two_client_world):
+    """The client filter is now a text search box (not a 2,000-option dropdown); the typed
+    term repaints into the input value."""
+    body = client.get("/dashboard/?client_q=Acme").data.decode()
+    assert 'name="client_q"' in body
+    assert 'value="Acme"' in body
 
 
 def test_invalid_client_filter_is_ignored(client, two_client_world):
@@ -869,7 +875,8 @@ def itr14_world(app):
 
 
 def test_itr14_renders_in_list(client, itr14_world):
-    body = client.get("/dashboard/").data.decode()
+    # window=all: the ITR14 is due ~10 months out, beyond the default d60 working view.
+    body = client.get("/dashboard/?window=all").data.decode()
     assert "Gamma Pty Ltd" in body
     assert itr14_world["itr14_due"] in body  # the ITR14 row's due date
 
@@ -877,7 +884,7 @@ def test_itr14_renders_in_list(client, itr14_world):
 def test_type_filter_itr14_shows_only_itr14_and_excludes_cipc(client, itr14_world):
     """type=ITR14 narrows to the ITR14 obligation and, per the existing logic (a named
     ObligationType drops CIPC), excludes the CIPC AR row."""
-    body = client.get("/dashboard/?type=ITR14").data.decode()
+    body = client.get("/dashboard/?type=ITR14&window=all").data.decode()
     assert itr14_world["itr14_due"] in body
     assert itr14_world["cipc_due"] not in body
 
@@ -892,7 +899,7 @@ def test_type_filter_includes_itr14_option_and_repaints(client, itr14_world):
 def test_itr14_pending_row_actions(client, itr14_world):
     """PENDING ITR14 offers Start / Mark submitted / Mark exempt — and never Mark paid."""
     oid = itr14_world["itr14_id"]
-    body = client.get("/dashboard/").data.decode()
+    body = client.get("/dashboard/?window=all").data.decode()
     assert f"/dashboard/obligations/{oid}/mark-in-progress" in body
     assert f"/dashboard/obligations/{oid}/mark-submitted" in body
     assert f"/dashboard/obligations/{oid}/mark-exempt" in body
@@ -904,7 +911,7 @@ def test_itr14_in_progress_row_actions(client, itr14_world):
     Mark paid."""
     oid = itr14_world["itr14_id"]
     client.post(f"/dashboard/obligations/{oid}/mark-in-progress")
-    body = client.get("/dashboard/").data.decode()
+    body = client.get("/dashboard/?window=all").data.decode()
     assert f"/dashboard/obligations/{oid}/mark-submitted" in body
     assert f"/dashboard/obligations/{oid}/revert-to-pending" in body
     assert f"/dashboard/obligations/{oid}/mark-exempt" in body
@@ -916,7 +923,7 @@ def test_itr14_submitted_row_is_terminal(client, itr14_world):
     oid = itr14_world["itr14_id"]
     client.post(f"/dashboard/obligations/{oid}/mark-submitted")
     assert db.session.get(ObligationInstance, oid).status is ObligationStatus.SUBMITTED
-    body = client.get("/dashboard/").data.decode()
+    body = client.get("/dashboard/?window=all").data.decode()
     for action in ("mark-paid", "mark-submitted", "mark-exempt", "mark-in-progress"):
         assert f"/dashboard/obligations/{oid}/{action}" not in body
 
@@ -946,3 +953,129 @@ def test_itr14_detail_pending_offers_no_mark_paid(client, itr14_world):
     assert f"/dashboard/obligations/{oid}/mark-submitted" in body
     assert f"/dashboard/obligations/{oid}/mark-exempt" in body
     assert f"/dashboard/obligations/{oid}/mark-paid" not in body
+
+
+# --- ITR12 confirmation: enum-driven Type filter + adapter detail (Ticket 4b) ---
+
+
+@pytest.fixture
+def itr12_world(app):
+    """An individual with one PENDING ITR12, plus a company CIPC AR so the type=ITR12
+    filter's CIPC exclusion can be asserted. Distinct due-date markers."""
+    person = Client(legal_name="Smit, J", entity_type=EntityType.INDIVIDUAL)
+    company = Client(legal_name="Beta Holdings Pty Ltd", entity_type=EntityType.PTY_LTD)
+    db.session.add_all([person, company])
+    niel = Staff(code="NIEL", full_name="Niel Meyer", role=StaffRole.TAX)
+    db.session.add(niel)
+    db.session.commit()
+
+    it12 = ObligationInstance(
+        client_id=person.id,
+        obligation_type=ObligationType.ITR12,
+        period_start=date(2025, 3, 1),
+        period_end=date(2026, 2, 28),
+        submission_due_date=date(2026, 10, 23),
+        payment_due_date=date(2026, 10, 23),
+        status=ObligationStatus.PENDING,
+        assignee_id=niel.id,
+    )
+    cipc = CIPCAnnualInstance(
+        client_id=company.id,
+        anniversary_date=date(2025, 3, 15),
+        due_date=date(2026, 3, 15),
+        status=CIPCAnnualStatus.GENERATED,
+        assignee_id=niel.id,
+    )
+    db.session.add_all([it12, cipc])
+    db.session.commit()
+    return {"it12_id": it12.id, "it12_due": "2026-10-23", "cipc_due": "2026-03-15"}
+
+
+def test_itr12_renders_in_list(client, itr12_world):
+    body = client.get("/dashboard/?window=all").data.decode()
+    assert "Smit, J" in body
+    assert itr12_world["it12_due"] in body
+
+
+def test_type_filter_itr12_shows_only_itr12_and_excludes_cipc(client, itr12_world):
+    """ITR12 appears in the Type filter (enum-driven) and narrows to ITR12, dropping CIPC."""
+    body = client.get("/dashboard/?type=ITR12&window=all").data.decode()
+    assert itr12_world["it12_due"] in body
+    assert itr12_world["cipc_due"] not in body
+
+
+def test_type_filter_includes_itr12_option(client, itr12_world):
+    body = client.get("/dashboard/?type=ITR12").data.decode()
+    assert '<option value="ITR12" selected>ITR12</option>' in body
+
+
+def test_itr12_detail_renders_via_adapter_pending(client, itr12_world):
+    """The detail page renders ITR12 through the adapter: Start / Mark submitted / Mark
+    exempt, and never Mark paid (file-only)."""
+    oid = itr12_world["it12_id"]
+    body = client.get(f"/dashboard/obligations/{oid}").data.decode()
+    assert "ITR12" in body
+    assert f"/dashboard/obligations/{oid}/mark-submitted" in body
+    assert f"/dashboard/obligations/{oid}/mark-paid" not in body
+
+
+def test_itr12_detail_submitted_is_terminal(client, itr12_world):
+    """A SUBMITTED ITR12 detail page is terminal — no action forms at all."""
+    oid = itr12_world["it12_id"]
+    client.post(f"/dashboard/obligations/{oid}/mark-submitted")
+    assert db.session.get(ObligationInstance, oid).status is ObligationStatus.SUBMITTED
+    body = client.get(f"/dashboard/obligations/{oid}").data.decode()
+    for action in ("mark-paid", "mark-submitted", "mark-exempt", "mark-in-progress"):
+        assert f"/dashboard/obligations/{oid}/{action}" not in body
+
+
+# --- Archived clients are inert on the dashboard (H1 chunk 2) ---
+
+
+def test_archived_client_rows_and_dropdown_absent_from_dashboard(client, app):
+    """An archived client's obligation and CIPC rows never appear in the list, and the
+    client never appears in the filter dropdown; an active client's row still renders."""
+    with app.app_context():
+        archived = Client(legal_name="Ghost Pty Ltd", entity_type=EntityType.PTY_LTD, active=False)
+        active = Client(legal_name="Live Pty Ltd", entity_type=EntityType.PTY_LTD)
+        db.session.add_all([archived, active])
+        db.session.commit()
+
+        db.session.add_all(
+            [
+                ObligationInstance(
+                    client_id=archived.id,
+                    obligation_type=ObligationType.VAT201,
+                    period_start=date(2026, 1, 1),
+                    period_end=date(2026, 1, 31),
+                    submission_due_date=date(2026, 1, 31),
+                    payment_due_date=date(2026, 1, 31),
+                    status=ObligationStatus.PENDING,
+                ),
+                CIPCAnnualInstance(
+                    client_id=archived.id,
+                    anniversary_date=date(2025, 3, 15),
+                    due_date=date(2026, 3, 15),
+                    status=CIPCAnnualStatus.GENERATED,
+                ),
+                ObligationInstance(
+                    client_id=active.id,
+                    obligation_type=ObligationType.VAT201,
+                    period_start=date(2026, 2, 1),
+                    period_end=date(2026, 2, 28),
+                    submission_due_date=date(2026, 2, 28),
+                    payment_due_date=date(2026, 2, 28),
+                    status=ObligationStatus.PENDING,
+                ),
+            ]
+        )
+        db.session.commit()
+
+    body = client.get("/dashboard/").data.decode()
+    # Active client's row renders; archived obligation + CIPC rows do not.
+    assert "2026-02-28" in body
+    assert "2026-01-31" not in body
+    assert "2026-03-15" not in body
+    # Dropdown lists the active client only.
+    assert "Live Pty Ltd" in body
+    assert "Ghost Pty Ltd" not in body

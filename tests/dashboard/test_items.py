@@ -284,3 +284,92 @@ def test_cipc_decline_offered_exactly_on_pre_filing_states():
         CIPCAnnualStatus.INVOICE_PAID,
         CIPCAnnualStatus.BO_SUBMITTED,
     }
+
+
+# --- ITR12 confirmation: file-only wiring covers it with no adapter change (Ticket 4b) ---
+
+
+def test_itr12_is_terminal_at_submitted_via_adapter():
+    """ITR12 is file-only, so the data-driven is_done gating makes SUBMITTED terminal —
+    no actions, not open, never 'mark_paid'. No adapter change was needed for IT12."""
+    oi = _obligation(ObligationStatus.SUBMITTED)
+    oi.obligation_type = ObligationType.ITR12
+    item = from_obligation(oi, TODAY)
+    assert item.actions == ()
+    assert item.is_open is False
+    assert "mark_paid" not in _keys(item)
+
+
+def test_itr12_pending_offers_no_mark_paid_via_adapter():
+    oi = _obligation(ObligationStatus.PENDING)
+    oi.obligation_type = ObligationType.ITR12
+    item = from_obligation(oi, TODAY)
+    assert _keys(item) == ["mark_in_progress", "mark_submitted", "mark_exempt"]
+    assert "mark_paid" not in _keys(item)
+
+
+# --- IRP6 (provisional tax): payment-leg actions + window/voluntary display ---
+
+
+def _irp6(status: ObligationStatus, window_code: str = "01") -> ObligationInstance:
+    oi = _obligation(status)
+    oi.obligation_type = ObligationType.IRP6
+    oi.window_code = window_code
+    return oi
+
+
+def test_irp6_pending_offers_submit_action():
+    """IRP6 is data-driven through the status-keyed action map, so PENDING exposes the
+    submit transition automatically — no IRP6-specific branch."""
+    item = from_obligation(_irp6(ObligationStatus.PENDING), TODAY)
+    assert "mark_submitted" in _keys(item)
+
+
+def test_irp6_submitted_offers_pay_action():
+    """IRP6 carries a payment leg (is_done only at PAID), so a SUBMITTED IRP6 is still open
+    and offers Mark paid — exactly like VAT201, derived from has_payment_leg."""
+    item = from_obligation(_irp6(ObligationStatus.SUBMITTED), TODAY)
+    assert "mark_paid" in _keys(item)
+    assert item.is_open is True
+
+
+def test_irp6_window_code_propagates_and_third_is_voluntary():
+    for code in ("01", "02"):
+        item = from_obligation(_irp6(ObligationStatus.PENDING, code), TODAY)
+        assert item.window_code == code
+        assert item.is_voluntary is False
+    third = from_obligation(_irp6(ObligationStatus.PENDING, "03"), TODAY)
+    assert third.window_code == "03"
+    assert third.is_voluntary is True
+
+
+def test_non_irp6_has_no_window_or_voluntary_flag():
+    """A VAT201 row leaves the IRP6-only display hints unset."""
+    item = from_obligation(_obligation(ObligationStatus.PENDING), TODAY)
+    assert item.window_code is None
+    assert item.is_voluntary is False
+
+
+# --- EMP501 (employer reconciliation): file-only, no window hints ---
+
+
+@pytest.mark.parametrize(
+    "emp501_type",
+    [ObligationType.EMP501_INTERIM, ObligationType.EMP501_ANNUAL],
+)
+def test_emp501_is_file_only_on_dashboard(emp501_type):
+    """Both EMP501 reconciliations are file-only: PENDING offers Mark submitted (no Mark
+    paid), and SUBMITTED is terminal — derived from has_payment_leg via is_done, no
+    EMP501-specific branch. No IRP6-style window/voluntary hints either."""
+    oi = _obligation(ObligationStatus.PENDING)
+    oi.obligation_type = emp501_type
+    pending = from_obligation(oi, TODAY)
+    assert "mark_submitted" in _keys(pending)
+    assert "mark_paid" not in _keys(pending)
+    assert pending.window_code is None
+    assert pending.is_voluntary is False
+
+    oi.status = ObligationStatus.SUBMITTED
+    submitted = from_obligation(oi, TODAY)
+    assert submitted.is_open is False
+    assert _keys(submitted) == []  # file-only → done at SUBMITTED → terminal

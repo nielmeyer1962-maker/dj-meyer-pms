@@ -208,10 +208,109 @@ def test_vat201_has_payment_leg():
     assert ObligationType.VAT201.has_payment_leg is True
 
 
+def test_itr12_is_file_only():
+    """ITR12 (individual income-tax return) is file-only — like ITR14, it is absent from
+    _PAYMENT_LEG_TYPES, so has_payment_leg is False and it is done at SUBMITTED."""
+    assert ObligationType.ITR12.value not in _PAYMENT_LEG_TYPES
+    assert ObligationType.ITR12.has_payment_leg is False
+
+
+def test_itr12_is_done_at_submitted():
+    """A file-only ITR12 is finished once SUBMITTED (no payment leg); EXEMPT is also done,
+    PENDING/IN_PROGRESS are not. is_done is a pure property, so no DB is needed."""
+    oi = ObligationInstance(obligation_type=ObligationType.ITR12)
+    for status, expected in (
+        (ObligationStatus.PENDING, False),
+        (ObligationStatus.IN_PROGRESS, False),
+        (ObligationStatus.SUBMITTED, True),
+        (ObligationStatus.EXEMPT, True),
+    ):
+        oi.status = status
+        assert oi.is_done is expected
+
+
 def test_payment_leg_map_covers_future_types():
-    """EMP201 and IRP6 are not yet ObligationType members, but the payment-leg map
-    must already cover them so is_done is correct the moment they are added."""
+    """The payment-leg map is keyed by enum value; VAT201, EMP201 and IRP6 are all
+    now ObligationType members and all carry a payment leg."""
     assert _PAYMENT_LEG_TYPES == {"VAT201", "EMP201", "IRP6"}
+
+
+def test_irp6_is_a_member_with_payment_leg():
+    """IRP6 (provisional tax) is a payment-leg type — filed and paid, so done at PAID."""
+    assert ObligationType.IRP6.value == "IRP6"
+    assert ObligationType.IRP6.value in _PAYMENT_LEG_TYPES
+    assert ObligationType.IRP6.has_payment_leg is True
+
+
+def test_irp6_is_done_at_paid():
+    """IRP6 carries a payment leg, so a SUBMITTED-but-unpaid provisional return is not
+    finished; only PAID (or EXEMPT) counts as done."""
+    oi = ObligationInstance(obligation_type=ObligationType.IRP6)
+    for status, expected in (
+        (ObligationStatus.PENDING, False),
+        (ObligationStatus.IN_PROGRESS, False),
+        (ObligationStatus.SUBMITTED, False),
+        (ObligationStatus.PAID, True),
+        (ObligationStatus.EXEMPT, True),
+    ):
+        oi.status = status
+        assert oi.is_done is expected
+
+
+def test_emp501_values_are_members_and_file_only():
+    """Both EMP501 reconciliations are ObligationType members and file-only — the
+    reconciliation is a declaration (PAYE is paid monthly via EMP201), so neither carries
+    a payment leg."""
+    assert ObligationType.EMP501_INTERIM.value == "EMP501_INTERIM"
+    assert ObligationType.EMP501_ANNUAL.value == "EMP501_ANNUAL"
+    for t in (ObligationType.EMP501_INTERIM, ObligationType.EMP501_ANNUAL):
+        assert t.value not in _PAYMENT_LEG_TYPES
+        assert t.has_payment_leg is False
+
+
+def test_emp501_is_done_at_submitted():
+    """A file-only EMP501 is finished once SUBMITTED; EXEMPT is also done, PENDING/
+    IN_PROGRESS are not. is_done is a pure property, so no DB is needed."""
+    for emp501 in (ObligationType.EMP501_INTERIM, ObligationType.EMP501_ANNUAL):
+        oi = ObligationInstance(obligation_type=emp501)
+        for status, expected in (
+            (ObligationStatus.PENDING, False),
+            (ObligationStatus.IN_PROGRESS, False),
+            (ObligationStatus.SUBMITTED, True),
+            (ObligationStatus.EXEMPT, True),
+        ):
+            oi.status = status
+            assert oi.is_done is expected
+
+
+def test_window_code_column_behaviour(app):
+    """window_code defaults to None (every non-IRP6 row leaves it unset) and round-trips
+    the IRP6 period markers "01"/"02"/"03"."""
+    with app.app_context():
+        c = _make_client()
+
+        # Default: a VAT201 row leaves window_code NULL.
+        oi_default = ObligationInstance(**_instance_kwargs(c.id, date(2026, 8, 31)))
+        db.session.add(oi_default)
+        db.session.commit()
+        db.session.refresh(oi_default)
+        assert oi_default.window_code is None
+
+        # An IRP6 row stores its window marker (and the IRP6 enum value round-trips).
+        oi_irp6 = ObligationInstance(
+            client_id=c.id,
+            obligation_type=ObligationType.IRP6,
+            period_start=date(2026, 3, 1),
+            period_end=date(2026, 8, 31),
+            submission_due_date=date(2026, 8, 31),
+            payment_due_date=date(2026, 8, 31),
+            window_code="01",
+        )
+        db.session.add(oi_irp6)
+        db.session.commit()
+        db.session.refresh(oi_irp6)
+        assert oi_irp6.obligation_type is ObligationType.IRP6
+        assert oi_irp6.window_code == "01"
 
 
 @pytest.mark.parametrize(

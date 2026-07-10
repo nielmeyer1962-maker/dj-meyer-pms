@@ -27,6 +27,7 @@ from datetime import date
 from app.models.client import Client
 from app.models.obligation import ObligationInstance, ObligationStatus, ObligationType
 from app.utils.business_days import shift_to_prior_business_day
+from app.utils.dates import today_sast
 
 
 def _first_of_month(d: date, delta_months: int) -> date:
@@ -90,13 +91,15 @@ def generate_emp201(
     (client.has_paye is False), mirroring how generate_vat201 gates on has_vat.
 
     The today parameter exists solely for test determinism. In production, leave
-    it as None and the function uses date.today().
+    it as None and the function uses today_sast().
     """
+    if not client.active:
+        return []
     if not client.has_paye:
         return []
 
     if today is None:
-        today = date.today()
+        today = today_sast()
 
     instances: list[ObligationInstance] = []
     for period_end in _period_ends_in_window(today, months_ahead):

@@ -18,8 +18,12 @@ from app.extensions import db
 from app.models.client import Client
 from app.models.obligation import ObligationInstance, ObligationStatus, ObligationType
 from app.services.obligations.emp201 import generate_emp201
+from app.services.obligations.emp501 import generate_emp501
+from app.services.obligations.irp6 import generate_irp6
+from app.services.obligations.it12 import generate_it12
 from app.services.obligations.itr14 import generate_itr14
 from app.services.obligations.vat201 import generate_vat201
+from app.utils.dates import today_sast
 
 
 class RegenerateResult(NamedTuple):
@@ -45,7 +49,7 @@ def regenerate(client: Client, today: date | None = None) -> RegenerateResult:
     handler in the regenerate route catches it.
     """
     if today is None:
-        today = date.today()
+        today = today_sast()
 
     existing: dict[tuple[ObligationType, date], ObligationInstance] = {
         (row.obligation_type, row.period_end): row
@@ -62,6 +66,14 @@ def regenerate(client: Client, today: date | None = None) -> RegenerateResult:
             *generate_vat201(client, today=today),
             *generate_emp201(client, today=today),
             *generate_itr14(client, today=today),
+            *generate_it12(client, today=today),
+            # IRP6 self-gates on has_provisional_tax (returns [] otherwise), so a
+            # non-provisional client contributes no rows. The shared past-due-safe prune
+            # below protects lapsed PENDING IRP6 rows, including the voluntary 03.
+            *generate_irp6(client, today=today),
+            # EMP501 self-gates on has_paye; the two reconciliation types carry distinct
+            # period keys, so they never collide with EMP201 or each other.
+            *generate_emp501(client, today=today),
         )
     }
 

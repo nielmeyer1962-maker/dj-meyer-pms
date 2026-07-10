@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
-from sqlalchemy import ColumnElement, and_
+from sqlalchemy import ColumnElement, and_, or_
 
 from app.models.obligation import ObligationInstance, ObligationStatus
 
@@ -28,4 +28,19 @@ def overdue_filter(today: date) -> ColumnElement[bool]:
     return and_(
         ObligationInstance.status.in_(_OPEN_STATUSES),
         ObligationInstance.submission_due_date < today,
+    )
+
+
+def due_window_filter(today: date, days: int) -> ColumnElement[bool]:
+    """The dashboard "due window": overdue (open + past-due) OR due within the next
+    `days` days inclusive. The forward arm is status-agnostic (Status is a separate
+    filter); the overdue arm reuses overdue_filter so the two never diverge. SQL-side so
+    the query fetches only what falls in the window — never the whole table."""
+    horizon = today + timedelta(days=days)
+    return or_(
+        overdue_filter(today),
+        and_(
+            ObligationInstance.submission_due_date >= today,
+            ObligationInstance.submission_due_date <= horizon,
+        ),
     )
