@@ -19,6 +19,7 @@ from app.models.client import EntityType, VatCategory
 
 if TYPE_CHECKING:
     from app.models.staff import Staff
+    from app.services.clients.readers import SourceRow
 
 # --- Exact source headers (verbatim — do not tidy the spellings) ---
 
@@ -306,3 +307,101 @@ def map_individual_row(
         fields=fields,
         issues=issues,
     )
+
+
+# --- orchestration + report ---
+
+COMPANIES = "companies"
+INDIVIDUALS = "individuals"
+
+_NAME_HEADER = {COMPANIES: CO_NAME, INDIVIDUALS: IN_NAME}
+_MAPPER = {COMPANIES: map_company_row, INDIVIDUALS: map_individual_row}
+
+
+@dataclass
+class ImportReport:
+    """Outcome of a dry-run parse. `to_insert`/`to_update` are the rows that would load
+    (classified against `existing_keys`); `duplicates` are (row, name, key) tuples skipped
+    because their natural key already appeared earlier in the same file."""
+
+    kind: str
+    source_rows: int  # non-empty rows read from the sheet
+    real_rows: int  # rows with a name (after junk-skip)
+    to_insert: list[ParsedRow] = field(default_factory=list)
+    to_update: list[ParsedRow] = field(default_factory=list)
+    duplicates: list[tuple[int, str, str]] = field(default_factory=list)
+
+    @property
+    def flagged(self) -> list[ParsedRow]:
+        return [row for row in (self.to_insert + self.to_update) if row.issues]
+
+    def render(self) -> str:
+        lines = [
+            f"Client import - {self.kind} (DRY RUN - no changes written)",
+            f"  source rows (non-empty): {self.source_rows}",
+            f"  real rows (named):       {self.real_rows}",
+            f"  would insert:            {len(self.to_insert)}",
+            f"  would update:            {len(self.to_update)}",
+            f"  skipped duplicates:      {len(self.duplicates)}",
+            f"  flagged (data-quality):  {len(self.flagged)}",
+        ]
+        if self.flagged:
+            lines.append("\nData-quality issues:")
+            for row in sorted(self.flagged, key=lambda r: r.number):
+                name = row.fields.get("legal_name") or "(no name)"
+                lines.append(f"  row {row.number}  {name}")
+                lines.extend(f"      - {issue}" for issue in row.issues)
+        if self.duplicates:
+            lines.append("\nSkipped duplicates (natural key already seen in this file):")
+            for number, name, key in self.duplicates:
+                lines.append(f"  row {number}  {name or '(no name)'}  [{key}]")
+        return "\n".join(lines)
+
+
+def parse_file(
+    rows: Iterable[SourceRow],
+    kind: str,
+    staff: Iterable[Staff],
+    existing_keys: frozenset[str] = frozenset(),
+) -> ImportReport:
+    """Map every real row, detect intra-file duplicate natural keys, classify insert vs
+    update against `existing_keys`, and compose each row's data_quality_note. No DB writes —
+    the caller decides whether to commit (Chunk 2)."""
+    if kind not in _MAPPER:
+        raise ValueError(f"unknown import kind {kind!r}: expected 'companies' or 'individuals'")
+    name_header = _NAME_HEADER[kind]
+    mapper = _MAPPER[kind]
+    staff_index = build_staff_index(staff)
+
+    rows = list(rows)
+    # Junk-row filter: a row without a name is a template/blank line, not a client
+    # (the CIPC sheet carries ~850 of these below the real 447).
+    real = [row for row in rows if row.values.get(name_header)]
+    parsed = [mapper(row.number, row.values, staff_index) for row in real]
+
+    # Intra-file duplicates: the first row with a key loads; later rows sharing it are
+    # skipped (never silently merged) and the first row is flagged so the pair surfaces.
+    seen: dict[str, ParsedRow] = {}
+    loaded: list[ParsedRow] = []
+    duplicates: list[tuple[int, str, str]] = []
+    for row in parsed:
+        key = row.natural_key
+        if key and key in seen:
+            duplicates.append((row.number, row.fields.get("legal_name") or "", key))
+            seen[key].issues.append(f"shares natural key {key} with row {row.number} (skipped)")
+            continue
+        if key:
+            seen[key] = row
+        loaded.append(row)
+
+    report = ImportReport(
+        kind=kind, source_rows=len(rows), real_rows=len(real), duplicates=duplicates
+    )
+    for row in loaded:
+        if row.issues:
+            row.fields["data_quality_note"] = "; ".join(row.issues)
+        if row.natural_key and row.natural_key in existing_keys:
+            report.to_update.append(row)
+        else:
+            report.to_insert.append(row)
+    return report
