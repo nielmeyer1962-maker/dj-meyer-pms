@@ -1,4 +1,5 @@
 # Server Import Runbook — Client Data Load (claudedb)
+
 ## Access (learned the hard way, 11 July 2026)
 
 - SSH user on claudedb is **djmeyer** (NOT niel — this cost 20 minutes).
@@ -7,7 +8,7 @@
   `psql "$(grep -E '^DATABASE_URL=' .env | cut -d= -f2-)"`
 - Client table is named **clients** (plural).
 - After any pull that touches requirements.txt: run `pip install -r requirements.txt` before any flask command.
-
+- The two `<user>`/`<unit>` placeholders below resolve to: **djmeyer** / **dj-meyer-pms**.
 Go-live step 1, **server leg**. Loads ~805 clients into the production DB on **claudedb**
 via the `flask import-clients` CLI (Ticket 10). Run top to bottom.
 
