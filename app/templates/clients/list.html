@@ -5,6 +5,13 @@
   <h1 class="h3">Clients</h1>
   <a href="{{ url_for('clients.create_client') }}" class="btn btn-primary">+ New client</a>
 </div>
+<p class="text-muted small mb-3" id="client-count">
+  {% if shown_count == total_count -%}
+    Showing {{ total_count }} client{{ '' if total_count == 1 else 's' }}
+  {%- else -%}
+    Showing {{ shown_count }} of {{ total_count }} client{{ '' if total_count == 1 else 's' }}
+  {%- endif %}
+</p>
 <table class="table table-hover">
   <thead>
     <tr>

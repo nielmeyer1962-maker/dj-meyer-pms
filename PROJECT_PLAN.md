@@ -2899,6 +2899,37 @@ import data alone.
 - **QuickBooks contact merge** — the QB export carries phone numbers and addresses the source lists lack; a Phase-B re-run mapping by name/reg number. Design when needed.
 - **`/06` suffix mapping** — confirmed rare; verify NPC treatment against an actual example when one appears in the data.
 
+## Backlog — Clients page: search + staff-member filter
+
+**Status:** Planned, not built. Planning note only — no code in this ticket.
+
+**Goal.** Add a free-text search and a staff-member filter to the Clients list page
+(`/clients`), so staff can narrow the 800+ row list and reception can confirm counts
+from the UI rather than reaching for `psql`.
+
+**What it builds on and touches:**
+
+- **Activates the dormant "of Y" branch in `list.html`.** The client-count line shipped
+  in `feat/client-count-ui` already renders `Showing X of Y clients` whenever
+  `shown_count < total_count`; today the two are always equal, so only the plain
+  `Showing N clients` form is ever seen. A filter is the first caller that will pass a
+  filtered `shown_count` below `total_count` — lighting up that branch with **no template
+  change**.
+- **Search** — free-text match over legal/trading name (likely tax ref too). Introduces a
+  `?q=` query param handled in `list_clients`; this is the first route-logic change on
+  that view (the count ticket deliberately stopped at passing counts and added no filter).
+- **Filter by staff member** — needs two things the current list view lacks:
+  1. **The client→staff relationship exposed on the list query.** `list_clients` selects
+     `Client` only; filtering/showing the owner means filtering on `Client.allocated_staff_id`
+     and `selectinload`-ing `Client.allocated_staff` (which is `lazy="select"`) to honour
+     the anti-N+1 rule in CLAUDE.md.
+  2. **A staff dropdown** sourced from the staff roster (the nine-row roster), filtering the
+     list to a chosen `allocated_staff_id`. "Unallocated" (NULL) should be a selectable
+     option, since an unallocated client is a first-class state on the model.
+
+**Sequencing.** Display-only count first (done); search + staff filter second. Recorded
+here so the ordering is explicit and the count work isn't retro-fitted.
+
 
 
 

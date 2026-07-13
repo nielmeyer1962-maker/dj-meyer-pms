@@ -207,3 +207,30 @@ def test_regenerate_obligations_is_idempotent(app, client):
         b"Regenerated obligations for Idem Co: added 0, updated 0, removed 0; "
         b"CIPC added 0, updated 0, removed 0." in resp.data
     )
+
+
+# --- list_clients: count display ---
+
+
+def test_list_clients_shows_plural_count(app, client):
+    with app.app_context():
+        db.session.add_all(
+            [
+                Client(legal_name="Alpha Co", entity_type=EntityType.PTY_LTD),
+                Client(legal_name="Beta Co", entity_type=EntityType.PTY_LTD),
+            ]
+        )
+        db.session.commit()
+    resp = client.get("/clients/")
+    assert resp.status_code == 200
+    assert b"Showing 2 clients" in resp.data
+
+
+def test_list_clients_count_is_singular_for_one(app, client):
+    with app.app_context():
+        db.session.add(Client(legal_name="Solo Co", entity_type=EntityType.PTY_LTD))
+        db.session.commit()
+    resp = client.get("/clients/")
+    assert resp.status_code == 200
+    assert b"Showing 1 client" in resp.data
+    assert b"Showing 1 clients" not in resp.data
