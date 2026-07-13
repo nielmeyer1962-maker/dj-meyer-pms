@@ -34,7 +34,7 @@
       <td>
         <a href="{{ url_for('clients.edit_client', client_id=c.id) }}"
            class="btn btn-sm btn-outline-secondary">Edit</a>
-        {% if c.active %}
+        {% if c.active and current_user.is_admin %}
         <form method="post" action="{{ url_for('clients.archive_client', client_id=c.id) }}"
               class="d-inline"
               onsubmit="return confirm('Archive {{ c.legal_name }}?')">
