@@ -13,7 +13,12 @@ bp = Blueprint("clients", __name__, url_prefix="/clients")
 @bp.get("/")
 def list_clients():
     clients = db.session.scalars(db.select(Client).order_by(Client.legal_name)).all()
-    return render_template("clients/list.html", clients=clients)
+    return render_template(
+        "clients/list.html",
+        clients=clients,
+        shown_count=len(clients),
+        total_count=len(clients),
+    )
 
 
 @bp.route("/new", methods=["GET", "POST"])
