@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from flask import Blueprint, flash, redirect, render_template, request, url_for
+from flask import Blueprint, Response, flash, redirect, render_template, request, url_for
 
 from app.auth.decorators import require_admin
 from app.extensions import db
@@ -19,10 +19,11 @@ bp = Blueprint("settings", __name__, url_prefix="/settings")
 
 
 @bp.before_request
-def _settings_requires_admin() -> None:
+def _settings_requires_admin() -> Response | None:
     """Guard the WHOLE settings blueprint: every current and future route is admin-only,
-    so a new settings view can never be added unguarded by accident."""
-    require_admin()
+    so a new settings view can never be added unguarded by accident. Returning the result
+    lets require_admin's flash+redirect take effect for non-admins."""
+    return require_admin()
 
 
 def _current_or_default(key: str, default: int) -> int:
